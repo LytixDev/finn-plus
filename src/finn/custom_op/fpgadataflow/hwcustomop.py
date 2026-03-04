@@ -37,7 +37,6 @@ import numpy.typing as npt
 import os
 from abc import abstractmethod
 from collections.abc import Sequence
-from finn_xsi.sim_engine import SimEngine
 from onnx import NodeProto
 from pathlib import Path
 from qonnx.core.datatype import BaseDataType
@@ -187,7 +186,7 @@ class HWCustomOp(CustomOp):
         intf_names["ap_none"] = []
         return intf_names
 
-    def get_rtlsim(self) -> SimEngine:
+    def get_rtlsim(self) -> xsi.SimEngine:
         """Return a xsi wrapper for the emulation library for this node."""
         import finn_xsi.adapter as finnxsi
 
@@ -215,7 +214,7 @@ class HWCustomOp(CustomOp):
 
         return sim
 
-    def close_rtlsim(self, sim: SimEngine) -> None:
+    def close_rtlsim(self, sim: xsi.SimEngine) -> None:
         """Close and free up resources for rtlsim.
 
         Args:
@@ -309,14 +308,14 @@ class HWCustomOp(CustomOp):
         """
         return {}
 
-    def reset_rtlsim(self, sim: SimEngine) -> None:
+    def reset_rtlsim(self, sim: xsi.SimEngine) -> None:
         """Set reset input in finnxsi to zero, toggle the clock and set it back to one."""
         import finn_xsi.adapter as finnxsi
 
         # without finnxsi dependency
         finnxsi.reset_rtlsim(sim)
 
-    def rtlsim_multi_io(self, sim: SimEngine, io_dict: dict[str, Any], sname: str = "_V") -> None:
+    def rtlsim_multi_io(self, sim: xsi.SimEngine, io_dict: dict[str, Any], sname: str = "_V") -> None:
         """Run rtlsim for this node, supports multiple i/o streams."""
         import finn_xsi.adapter as finnxsi
 
