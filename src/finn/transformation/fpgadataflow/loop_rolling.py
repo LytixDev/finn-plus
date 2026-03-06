@@ -361,8 +361,8 @@ def validate_loop_io_tensor_pair(tensor_a, tensor_b):
         tensor_a.meta["quant_parameter_tensor_names"]["finn_datatype"],
         tensor_b.meta["quant_parameter_tensor_names"]["finn_datatype"],
     ), f"""FINNLoop body activation input/output finn_datatype mismatch
-       {tensor_a.meta['quant_parameter_tensor_names']['finn_datatype']} !=
-       {tensor_b.meta['quant_parameter_tensor_names']['finn_datatype']}"""
+       tensor_a: {tensor_a.name} ({tensor_a.meta['quant_parameter_tensor_names']['finn_datatype']})
+       tensor_b: {tensor_b.name} ({tensor_b.meta['quant_parameter_tensor_names']['finn_datatype']})"""
 
 
 def validate_loop_io_tensors(loop_node: ir.Node):
@@ -587,7 +587,14 @@ class LoopRolling(Transformation):
                 except (KeyError, AttributeError):
                     # Operator doesn't need adaptation or doesn't support it
                     pass
+                except ValueError as e:
+                    log.warning(f"Skipping adapt_for_loop_body for {node.op_type} ({node.name}): {e}")
 
-        model = model_wrapper.transform(FoldConstants())
+        # NICCHANGE:
+        #   Constants should also be folded in the loop bodies.
+        #   If that doesn't happen then hw_codegen fails because it currently expect to grab 
+        #   inputs from node initializers. (other steps also fail because they don't know how
+        #   to deal with constant nodes). 
+        model = model_wrapper.transform(FoldConstants(), apply_to_subgraphs=True)
 
         return (model, False)
