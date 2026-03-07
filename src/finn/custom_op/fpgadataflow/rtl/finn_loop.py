@@ -369,11 +369,8 @@ class FINNLoop(HWCustomOp, RTLBackend):
         code_gen_dict["$LOOP_CONTROL_WRAPPER_NAME$"] = [f"{self.onnx_node.name}_loop_cont_wrapper"]
         code_gen_dict["$N_MAX_LAYERS$"] = (str(self.get_nodeattr("iteration")),)
         code_gen_dict["$N_LAYERS$"] = [str(self.get_nodeattr("iteration"))]
-        # NICCHANGE: pad to byte alignment because the MLO RTL infrastructure
-        #            computes FM_BEATS = FM_SIZE / (OLEN_BITS/8), which is a divide-by-zero
-        #            when OLEN_BITS < 8.
-        code_gen_dict["$ILEN_BITS$"] = [str(self.get_instream_width_padded(0))]
-        code_gen_dict["$OLEN_BITS$"] = [str(self.get_outstream_width_padded(0))]
+        code_gen_dict["$ILEN_BITS$"] = [str(self.get_instream_width(0))]
+        code_gen_dict["$OLEN_BITS$"] = [str(self.get_outstream_width(0))]
 
         input_elements = np.prod(self.get_normal_input_shape(0))
         input_bytes = (input_elements * self.get_input_datatype(0).bitwidth() + 8 - 1) // 8

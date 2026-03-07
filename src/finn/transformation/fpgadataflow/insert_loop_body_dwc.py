@@ -8,14 +8,25 @@ nodes at the loop body input and output when the stream width is not byte-aligne
 """
 
 import logging
+import math
 
 from onnx import TensorProto, helper as oh
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
 from qonnx.transformation.base import Transformation
-from qonnx.util.basic import roundup_to_integer_multiple
 
 log = logging.getLogger(__name__)
+
+
+def _byte_aligned_width(stream_width, elem_bitwidth):
+    """Compute the smallest width that is both a multiple of 8 (byte-aligned)
+    and a multiple of elem_bitwidth (so the DWC can evenly pack/unpack elements).
+
+    """
+    # NOTE: This works, but it's probably a really poor way of going about things.
+    # If our stream width is 5, and we need it to at least be 8, the lcm of 5 and 8 is 40.
+    # Not good! It would be much nicer to just increase the bit width of that stream to 8.
+    return math.lcm(8, elem_bitwidth)
 
 
 class InsertLoopBodyDWC(Transformation):
@@ -46,7 +57,8 @@ class InsertLoopBodyDWC(Transformation):
             out_width = last_inst.get_outstream_width(0)
 
             if out_width % 8 != 0:
-                padded_width = roundup_to_integer_multiple(out_width, 8)
+                out_elem_bits = last_inst.get_output_datatype(0).bitwidth()
+                padded_width = _byte_aligned_width(out_width, out_elem_bits)
                 log.info(
                     f"FINNLoop output stream width {out_width} is not byte-aligned, "
                     f"inserting DWC to widen to {padded_width}"
@@ -94,7 +106,8 @@ class InsertLoopBodyDWC(Transformation):
             in_width = first_inst.get_instream_width(0)
 
             if in_width % 8 != 0:
-                padded_width = roundup_to_integer_multiple(in_width, 8)
+                in_elem_bits = first_inst.get_input_datatype(0).bitwidth()
+                padded_width = _byte_aligned_width(in_width, in_elem_bits)
                 log.info(
                     f"FINNLoop input stream width {in_width} is not byte-aligned, "
                     f"inserting DWC to narrow from {padded_width} to {in_width}"
