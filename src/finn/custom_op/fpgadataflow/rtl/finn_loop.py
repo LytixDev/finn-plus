@@ -206,7 +206,15 @@ class FINNLoop(HWCustomOp, RTLBackend):
     def get_input_datatype(self, ind=0):
         """Returns FINN DataType of input."""
         if ind == 0:
-            idt = DataType[self.get_nodeattr("inputDataType")]
+            # NICCHANGE: The loop body node attribute's inputDataType is old and not up to date
+            #            instead we grab the first node in the loop body and use that.
+            #            I suppose it would be better to actually make the loop nodes' inputDataType
+            #            attribute up to date. Look into it later. Similar to get_output_datatype.
+            # idt = DataType[self.get_nodeattr("inputDataType")]
+            loop_body = self.get_nodeattr("body")
+            node = loop_body.graph.node[0]
+            inst = getCustomOp(node)
+            idt = inst.get_input_datatype(0)
         else:
             loop_body = self.get_nodeattr("body")
             tensor = loop_body.graph.input[ind].name
@@ -220,8 +228,16 @@ class FINNLoop(HWCustomOp, RTLBackend):
         return idt
 
     def get_output_datatype(self, ind=0):
-        odt = DataType[self.get_nodeattr("outputDataType")]
-        return odt
+        # NICCHANGE: The loop body node attribute's outputDataType is old and not up to date
+        #            instead we grab the final node in the loop body and use that.
+        #            I suppose it would be better to actually make the loop nodes' outputDataType 
+        #            attribute up to date. Look into it later.
+        # odt = DataType[self.get_nodeattr("outputDataType")]
+        # return odt
+        loop_body = self.get_nodeattr("body")
+        node = loop_body.graph.node[-1]
+        inst = getCustomOp(node)
+        return inst.get_output_datatype(0)
 
     def get_instream_width(self, ind=0):
         loop_body = self.get_nodeattr("body")
@@ -353,8 +369,11 @@ class FINNLoop(HWCustomOp, RTLBackend):
         code_gen_dict["$LOOP_CONTROL_WRAPPER_NAME$"] = [f"{self.onnx_node.name}_loop_cont_wrapper"]
         code_gen_dict["$N_MAX_LAYERS$"] = (str(self.get_nodeattr("iteration")),)
         code_gen_dict["$N_LAYERS$"] = [str(self.get_nodeattr("iteration"))]
-        code_gen_dict["$ILEN_BITS$"] = [str(self.get_instream_width(0))]
-        code_gen_dict["$OLEN_BITS$"] = [str(self.get_outstream_width(0))]
+        # NICCHANGE: pad to byte alignment because the MLO RTL infrastructure
+        #            computes FM_BEATS = FM_SIZE / (OLEN_BITS/8), which is a divide-by-zero
+        #            when OLEN_BITS < 8.
+        code_gen_dict["$ILEN_BITS$"] = [str(self.get_instream_width_padded(0))]
+        code_gen_dict["$OLEN_BITS$"] = [str(self.get_outstream_width_padded(0))]
 
         input_elements = np.prod(self.get_normal_input_shape(0))
         input_bytes = (input_elements * self.get_input_datatype(0).bitwidth() + 8 - 1) // 8
@@ -695,7 +714,7 @@ class FINNLoop(HWCustomOp, RTLBackend):
             loop_body,
             lambda node: (
                 node.op_type == "Thresholding_rtl"
-                # NICCHANGE: hmm why wasn't this here already?
+                # NICCHANGE: hmm why wasn't this here already? Hmm I think the constant folding means this change is redundant
                 and any(attr.name == "mlo_max_iter" and attr.i > 0 for attr in node.attribute)
             )
             or (

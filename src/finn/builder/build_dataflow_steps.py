@@ -83,6 +83,7 @@ from finn.transformation.fpgadataflow.derive_characteristic import (
 )
 from finn.transformation.fpgadataflow.hlssynth_ip import HLSSynthIP
 from finn.transformation.fpgadataflow.insert_dwc import InsertDWC
+from finn.transformation.fpgadataflow.insert_loop_body_dwc import InsertLoopBodyDWC
 from finn.transformation.fpgadataflow.insert_fifo import InsertFIFO
 from finn.transformation.fpgadataflow.insert_tlastmarker import InsertTLastMarker
 from finn.transformation.fpgadataflow.loop_rolling import LoopExtraction, LoopRolling
@@ -799,6 +800,29 @@ def step_minimize_bit_width(model: ModelWrapper, cfg: DataflowBuildConfig):
     return model
 
 
+# NICCHANGE: insert DWCs at loop body boundaries for byte-aligned stream widths
+def step_insert_loop_body_dwc(model: ModelWrapper, cfg: DataflowBuildConfig):
+    """Insert DWCs at FINNLoop body boundaries for byte-aligned stream widths.
+
+    The MLO loop control uses AXI-MM DMA for intermediate feature maps between
+    iterations, which requires byte-aligned stream widths. This step inserts
+    StreamingDataWidthConverter nodes at the loop body input/output when the
+    stream width is not a multiple of 8 bits.
+
+    This only needs to be ran when doing MLO and should be run after folding
+    and step_minimize_bit_width as these alter stream widths and may result in 
+    non nyte-aligned streams.
+    """
+    if cfg.mlo:
+        model = model.transform(InsertLoopBodyDWC())
+        # NOTE: This is a hack to specialize the DWCs as this step happens after specialization has
+        #       already ran. Either I think of a proper solution or maybe we can enforce that this
+        #       transformation happens after specialization, and then we're free to call it again?
+        model = model.transform(SpecializeLayers(cfg._resolve_fpga_part()), apply_to_subgraphs=True)
+        model = model.transform(GiveUniqueNodeNames(), apply_to_subgraphs=True)
+    return model
+
+
 def step_hw_codegen(model: ModelWrapper, cfg: DataflowBuildConfig):
     """Generate Vitis HLS code to prepare HLSBackend nodes for IP generation.
     And fills RTL templates for RTLBackend nodes."""
@@ -1469,6 +1493,7 @@ build_dataflow_step_lookup = {
     "step_target_fps_parallelization": step_target_fps_parallelization,
     "step_apply_folding_config": step_apply_folding_config,
     "step_minimize_bit_width": step_minimize_bit_width,
+    "step_insert_loop_body_dwc": step_insert_loop_body_dwc,
     "step_transpose_decomposition": step_transpose_decomposition,
     "step_generate_estimate_reports": step_generate_estimate_reports,
     "step_hw_codegen": step_hw_codegen,
