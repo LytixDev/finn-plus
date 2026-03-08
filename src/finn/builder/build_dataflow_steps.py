@@ -87,6 +87,10 @@ from finn.transformation.fpgadataflow.insert_loop_body_dwc import InsertLoopBody
 from finn.transformation.fpgadataflow.insert_fifo import InsertFIFO
 from finn.transformation.fpgadataflow.insert_tlastmarker import InsertTLastMarker
 from finn.transformation.fpgadataflow.loop_rolling import LoopExtraction, LoopRolling
+from finn.transformation.fpgadataflow.match_loop_body_dtypes import (
+    EnforceLoopBodyDtypeConstraint,
+    MatchLoopBodyBoundaryDtypes,
+)
 from finn.transformation.fpgadataflow.make_driver import (
     MakeCPPDriver,
     MakePYNQDriver,
@@ -790,17 +794,24 @@ def step_generate_estimate_reports(model: ModelWrapper, cfg: DataflowBuildConfig
 def step_minimize_bit_width(model: ModelWrapper, cfg: DataflowBuildConfig):
     """Tighten the weight and accumulator bit widths for each layer."""
     if cfg.minimize_bit_width:
-        model = model.transform(MinimizeWeightBitWidth(), apply_to_subgraphs=True)
-        model = model.transform(MinimizeAccumulatorWidth(), apply_to_subgraphs=True)
-        model = model.transform(RoundAndClipThresholds(), apply_to_subgraphs=True)
+        # NICCHANGE TODO: We want to apply this to the subgraph (loop body) as well
+        model = model.transform(MinimizeWeightBitWidth())
+        model = model.transform(MinimizeAccumulatorWidth())
+        model = model.transform(RoundAndClipThresholds())
         # make sure the changed datatypes are propagated through the network
-        model = model.transform(InferDataTypes(), apply_to_subgraphs=True)
+        model = model.transform(InferDataTypes())
+        # NICCHANGE: If minimize happened to narrow the loop body output then we must restore it
+        #            back to its original dtype (same dtype as the input to the loop body)
+        #            to maintin a constant FM_SIZE.
+        if cfg.mlo:
+            model = model.transform(EnforceLoopBodyDtypeConstraint())
     else:
         log.info("minimize_bit_width set to False, skipping step_minimize_bit_width.")
     return model
 
 
 # NICCHANGE: insert DWCs at loop body boundaries for byte-aligned stream widths
+# TODO: REMOVE, this is wrong, we want to upcast, not merge multiple data elements together.
 def step_insert_loop_body_dwc(model: ModelWrapper, cfg: DataflowBuildConfig):
     """Insert DWCs at FINNLoop body boundaries for byte-aligned stream widths.
 
@@ -1469,6 +1480,13 @@ def step_loop_rolling(model, cfg):
                 """MLO is selected but no loop range for the subgraph is specified,
                 this might cause an error during loop rolling."""
             )
+        if cfg.loop_body_range is not None:
+            # NICCHANGE: Widen/shrink the loop body output dtype to match the input dtype before rolling.
+            #            In loop rolling, the loop body input and output must have the same dtype.
+            #            If the dtypes are different, we attempt to perform a upcast/downcast without
+            #            altering the behavior. For example, a UINT7 can be upcasted to a UINT8.
+            model = model.transform(MatchLoopBodyBoundaryDtypes(cfg.loop_body_range))
+
         if cfg.loop_body_hierarchy is not None:
             log.info(f"Running Loop Rolling on {cfg.loop_body_hierarchy} hierarchy")
             loop_extraction = LoopExtraction(cfg.loop_body_hierarchy)

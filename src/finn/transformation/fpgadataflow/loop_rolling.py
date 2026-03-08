@@ -186,7 +186,11 @@ def build_loop_replace_pattern(graph, LoopBody):
 
     g_loop_body = LoopBody.function._graph
     odt = g_loop_body.outputs[0].meta["quant_parameter_tensor_names"]["finn_datatype"]
-    idt = odt
+    idt = g_loop_body.inputs[0].meta["quant_parameter_tensor_names"]["finn_datatype"]
+    assert idt == odt, (
+        f"Loop body input dtype ({idt}) != output dtype ({odt}). "
+        f"Run MatchLoopBodyBoundaryDtypes before loop rolling."
+    )
     body_attr = ir.Attr(name="body", type=ir.AttributeType.GRAPH, value=LoopBody.function._graph)
     backend_attr = ir.Attr(name="backend", type=ir.AttributeType.STRING, value="fpgadataflow")
     iteration = ir.Attr(name="iteration", type=ir.AttributeType.INT, value=iterations)
