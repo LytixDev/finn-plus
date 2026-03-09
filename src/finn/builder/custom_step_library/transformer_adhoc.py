@@ -188,6 +188,8 @@ def step_set_folding(model: ModelWrapper, cfg: DataflowBuildConfig):
 
     # Use FINN auto-folding to configure all other operators to reach the
     # same target cycles
+    # NICTODO: SetFolding doesn't fold FINNLoop body nodes. These need to be applied to subgraphs
+    #          as well. I think we need to adjusted the target to be target_cycles / iterations ?
     model = model.transform(
         SetFolding(target_cycles_per_frame, cfg.mvau_wwidth_max, cfg.folding_two_pass_relaxation)
     )

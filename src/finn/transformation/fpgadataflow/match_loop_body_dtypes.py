@@ -1,3 +1,4 @@
+from onnxscript import ir
 from qonnx.core.datatype import DataType
 from qonnx.custom_op.registry import getCustomOp
 from qonnx.transformation.base import Transformation
@@ -14,126 +15,98 @@ def dtype_fits_in(narrow_dt, wide_dt):
     return True
 
 
-class MatchLoopBodyBoundaryDtypes(Transformation):
-    """TODO comment
+def _derive_minimal_odt_from_ir(last_node):
+    # TODO: THIS IS STUPID AND VERY TEMPORARY
+    #       Need to handle this generally and properly.
+    op_type = last_node.op_type
 
-    In MLO, the loop body input and output dtypes must match because the RTL uses a single FM_SIZE 
-    (computed from INPUT_BYTES) for both the first-sample and backedge paths. This transformation 
-    ensures they match by widening the output dtype of the last node in each repeating block to 
-    match the input dtype of the first node, provided it fits.
+    # Only handle known op types where we can compute the minimum
+    if "ElementwiseAdd" not in op_type:
+        return None
 
-    Must be run AFTER SetLoopBoundary and BEFORE loop rolling. Automatically run as a part of the 
-    loop_rolling step.
-    """
+    # ElementwiseAdd has two data inputs (lhs, rhs)
+    input_dtypes = []
+    for inp in last_node.inputs:
+        meta = inp.meta.get("quant_parameter_tensor_names", {})
+        dt_str = meta.get("finn_datatype")
+        if dt_str is not None:
+            input_dtypes.append(DataType[dt_str])
 
-    def __init__(self, loop_body_range):
-        super().__init__()
-        self.start_name = loop_body_range[0].name
-        self.end_name = loop_body_range[1].name
+    if len(input_dtypes) < 2:
+        return None
 
-    def _get_loop_body_indices(self, graph):
-        """Find the first and last indices of loop body nodes by name."""
-        start_idx = None
-        end_idx = None
-        for i, node in enumerate(graph.node):
-            if node.name == self.start_name:
-                start_idx = i
-            if node.name == self.end_name:
-                end_idx = i
+    lhs_dt, rhs_dt = input_dtypes[0], input_dtypes[1]
+    max_width = max(lhs_dt.bitwidth(), rhs_dt.bitwidth())
+    signed = any([lhs_dt.signed(), rhs_dt.signed()])
+    out_width = max_width + 1
 
-        if start_idx is None or end_idx is None:
-            raise ValueError(
-                f"MatchLoopBodyBoundaryDtypes: Could not find loop body range "
-                f"nodes in graph: start={self.start_name} "
-                f"({'found' if start_idx is not None else 'NOT found'}), "
-                f"end={self.end_name} "
-                f"({'found' if end_idx is not None else 'NOT found'}). "
-                f"Ensure loop_body_range node names match the current model."
-            )
+    if signed:
+        return DataType[f"INT{out_width}"]
+    else:
+        return DataType[f"UINT{out_width}"]
 
-        return start_idx, end_idx
 
-    def apply(self, model):
-        graph = model.graph
-        start_idx, end_idx = self._get_loop_body_indices(graph)
+def match_loop_body_template_dtypes(loop_body_template):
+    # Relax dtype requirements for input and output streams by casting
+    g = loop_body_template._ir_graph
 
-        first_node = graph.node[start_idx]
-        first_inst = getCustomOp(first_node)
-        idt = first_inst.get_input_datatype(0)
+    # Read finn_datatype strings from the IR graph's input/output metadata
+    idt_str = g.inputs[0].meta["quant_parameter_tensor_names"]["finn_datatype"]
+    odt_str = g.outputs[0].meta["quant_parameter_tensor_names"]["finn_datatype"]
 
-        log.info(f"MatchLoopBodyBoundaryDtypes: loop body input dtype = {idt}")
+    log.info(f"match_loop_body_template_dtypes: template idt={idt_str}, odt={odt_str}")
 
-        last_node = graph.node[end_idx]
-        last_inst = getCustomOp(last_node)
-        current_odt = last_inst.get_output_datatype(0)
+    if idt_str == odt_str:
+        log.info("match_loop_body_template_dtypes: dtypes already match, nothing to do")
+        return
 
-        log.info(
-            f"MatchLoopBodyBoundaryDtypes: loop body output dtype = {current_odt} "
-            f"(last node: {last_node.op_type} {last_node.name})"
-        )
+    idt = DataType[idt_str]
+    last_node = g._nodes[-1]
 
-        if current_odt == idt:
-            log.info("MatchLoopBodyBoundaryDtypes: dtypes already match, nothing to do")
-            return model, False
-
-        # Compute the true minimal output dtype if the node supports it
-        if hasattr(last_inst, "_derive_out_dtype"):
-            minimal_odt = last_inst._derive_out_dtype(model)
-        else:
-            minimal_odt = current_odt
-
-        log.info(f"MatchLoopBodyBoundaryDtypes: true minimal output dtype = {minimal_odt}")
-
+    # Compute the mathematical minimum output dtype from the last node's inputs
+    minimal_odt = _derive_minimal_odt_from_ir(last_node)
+    if minimal_odt is not None:
+        log.info(f"match_loop_body_template_dtypes: minimal output dtype = {minimal_odt}")
         if not dtype_fits_in(minimal_odt, idt):
             raise ValueError(
-                f"MatchLoopBodyBoundaryDtypes: Cannot match loop body dtypes. "
-                f"Minimal output dtype {minimal_odt} does not fit in input dtype "
-                f"{idt}. The loop body output range [{minimal_odt.min()}, "
-                f"{minimal_odt.max()}] exceeds input range [{idt.min()}, "
-                f"{idt.max()}]."
+                f"match_loop_body_template_dtypes: Cannot match loop body dtypes. "
+                f"Minimal output dtype {minimal_odt} does not fit in input dtype {idt}. "
+                f"Output range [{minimal_odt.min()}, {minimal_odt.max()}] exceeds "
+                f"input range [{idt.min()}, {idt.max()}]."
             )
+    else:
+        log.warning(
+            f"match_loop_body_template_dtypes: Cannot derive minimal output dtype for "
+            f"{last_node.op_type}."
+        )
+        return
 
-        # Widen output dtype of the last node in EVERY repeating block.
-        # The loop body range covers all blocks. We identify block boundaries
-        # by finding nodes of the same op_type as the last node within the range.
-        # Each such node is the last node of a block.
-        # TODO: VERIFY
-        changed = False
-        for i in range(start_idx, end_idx + 1):
-            node = graph.node[i]
-            if node.op_type == last_node.op_type:
-                inst = getCustomOp(node)
-                node_odt = inst.get_output_datatype(0)
-                if node_odt != idt:
-                    # Check this node's minimal output also fits
-                    if hasattr(inst, "_derive_out_dtype"):
-                        node_minimal = inst._derive_out_dtype(model)
-                    else:
-                        node_minimal = node_odt
+    # Here we know the output dtype can safely be narrowed to the input dtype
 
-                    if not dtype_fits_in(node_minimal, idt):
-                        log.warning(
-                            f"MatchLoopBodyBoundaryDtypes: Skipping {node.name}, "
-                            f"minimal dtype {node_minimal} does not fit in {idt}"
-                        )
-                        continue
+    # Update the output tensor's finn_datatype metadata
+    g.outputs[0].meta["quant_parameter_tensor_names"]["finn_datatype"] = idt_str
 
-                    # Set the output dtype to match the input
-                    if hasattr(inst, "set_nodeattr"):
-                        try:
-                            inst.set_nodeattr("out_dtype", idt.name)
-                        except Exception:
-                            inst.set_nodeattr("outputDataType", idt.name)
-                    # Update tensor annotation
-                    output_tensor = node.output[0]
-                    model.set_tensor_datatype(output_tensor, idt)
-                    log.info(
-                        f"MatchLoopBodyBoundaryDtypes: Widened {node.name} output "
-                        f"from {node_odt} to {idt}"
-                    )
-                    changed = True
-
-        return model, changed
+    # Update the last node's out_dtype attribute
+    last_node = g._nodes[-1]
+    if "out_dtype" in last_node.attributes:
+        last_node.attributes["out_dtype"] = ir.Attr("out_dtype", ir.AttributeType.STRING, idt_str)
+        log.info(
+            f"match_loop_body_template_dtypes: Updated last node {last_node.op_type} "
+            f"out_dtype from {odt_str} to {idt_str}"
+        )
+    elif "outputDataType" in last_node.attributes:
+        last_node.attributes["outputDataType"] = ir.Attr(
+            "outputDataType", ir.AttributeType.STRING, idt_str
+        )
+        log.info(
+            f"match_loop_body_template_dtypes: Updated last node {last_node.op_type} "
+            f"outputDataType from {odt_str} to {idt_str}"
+        )
+    else:
+        log.warning(
+            f"match_loop_body_template_dtypes: Last node {last_node.op_type} has no "
+            f"out_dtype or outputDataType attribute to update"
+        )
 
 
 class EnforceLoopBodyDtypeConstraint(Transformation):
@@ -170,7 +143,7 @@ class EnforceLoopBodyDtypeConstraint(Transformation):
                 f"Widening output back to {idt}."
             )
 
-            # NOTE: I don't think this should be unreachable? We know idt == odt was true at some earlier point.
+            # NOTE: I don't think this should be reachable? We know idt == odt was true at some earlier point.
             if not dtype_fits_in(odt, idt):
                 raise ValueError(
                     f"EnforceLoopBodyDtypeConstraint: Cannot fix dtype mismatch "

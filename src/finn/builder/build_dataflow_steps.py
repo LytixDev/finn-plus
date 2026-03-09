@@ -89,7 +89,7 @@ from finn.transformation.fpgadataflow.insert_tlastmarker import InsertTLastMarke
 from finn.transformation.fpgadataflow.loop_rolling import LoopExtraction, LoopRolling
 from finn.transformation.fpgadataflow.match_loop_body_dtypes import (
     EnforceLoopBodyDtypeConstraint,
-    MatchLoopBodyBoundaryDtypes,
+    match_loop_body_template_dtypes,
 )
 from finn.transformation.fpgadataflow.make_driver import (
     MakeCPPDriver,
@@ -1480,17 +1480,16 @@ def step_loop_rolling(model, cfg):
                 """MLO is selected but no loop range for the subgraph is specified,
                 this might cause an error during loop rolling."""
             )
-        if cfg.loop_body_range is not None:
-            # NICCHANGE: Widen/shrink the loop body output dtype to match the input dtype before rolling.
-            #            In loop rolling, the loop body input and output must have the same dtype.
-            #            If the dtypes are different, we attempt to perform a upcast/downcast without
-            #            altering the behavior. For example, a UINT7 can be upcasted to a UINT8.
-            model = model.transform(MatchLoopBodyBoundaryDtypes(cfg.loop_body_range))
-
         if cfg.loop_body_hierarchy is not None:
             log.info(f"Running Loop Rolling on {cfg.loop_body_hierarchy} hierarchy")
             loop_extraction = LoopExtraction(cfg.loop_body_hierarchy)
             model = model.transform(loop_extraction)
+            # NICCHANGE: Fix loop body template dtypes between extraction and rolling.
+            #            LoopExtraction picks one block as the template. Its last node may have
+            #            a wider output dtype (e.g., UINT32) than the input dtype (e.g., UINT8).
+            #            MLO requires these dtypes to match, so we attempt to widen/narrow 
+            #            if it is possible.
+            match_loop_body_template_dtypes(loop_extraction.loop_body_template)
             model = model.transform(LoopRolling(loop_extraction.loop_body_template))
             move("loop-body-template.onnx", cfg.output_dir + "/loop-body-template.onnx")
     else:
