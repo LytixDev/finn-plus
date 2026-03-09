@@ -60,7 +60,8 @@ def common_divisors(numbers):
         individual_divisors = list(divisors(num))
         separate_divisors.append(individual_divisors)
 
-    return functools.reduce(np.intersect1d, separate_divisors)
+    # NICCHANGE: np.intersect1d returns numpy.int64 which set_nodeattr rejects, cast to int
+    return [int(x) for x in functools.reduce(np.intersect1d, separate_divisors)]
 
 
 # Find the op-type names for all HLS specializations of elementwise binary
