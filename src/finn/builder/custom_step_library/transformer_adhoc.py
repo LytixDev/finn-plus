@@ -186,12 +186,20 @@ def step_set_folding(model: ModelWrapper, cfg: DataflowBuildConfig):
     # Set folding to target cycles for all attention operators in the model
     model = _set_folding_attention(model, target_cycles_per_frame)
 
+    # NICCHANGE: Also set attention folding inside FINNLoop bodies
+    for node in model.graph.node:
+        if node.op_type == "FINNLoop":
+            node_inst = getCustomOp(node)
+            loop_model = node_inst.get_nodeattr("body")
+            loop_model = _set_folding_attention(loop_model, target_cycles_per_frame)
+            node_inst.set_nodeattr("body", loop_model.graph)
+
     # Use FINN auto-folding to configure all other operators to reach the
     # same target cycles
-    # NICTODO: SetFolding doesn't fold FINNLoop body nodes. These need to be applied to subgraphs
-    #          as well. I think we need to adjusted the target to be target_cycles / iterations ?
+    # NICCHANGE: apply_to_subgraphs=True so FINNLoop body nodes get folded too
     model = model.transform(
-        SetFolding(target_cycles_per_frame, cfg.mvau_wwidth_max, cfg.folding_two_pass_relaxation)
+        SetFolding(target_cycles_per_frame, cfg.mvau_wwidth_max, cfg.folding_two_pass_relaxation),
+        apply_to_subgraphs=True,
     )
 
     # Two-pass relaxation for attention operators: Redo folding settings

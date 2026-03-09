@@ -50,9 +50,10 @@ def match_loop_body_template_dtypes(loop_body_template):
     # Relax dtype requirements for input and output streams by casting
     g = loop_body_template._ir_graph
 
-    # Read finn_datatype strings from the IR graph's input/output metadata
-    idt_str = g.inputs[0].meta["quant_parameter_tensor_names"]["finn_datatype"]
-    odt_str = g.outputs[0].meta["quant_parameter_tensor_names"]["finn_datatype"]
+    first_node = g._nodes[0]
+    last_node = g._nodes[-1]
+    idt_str = first_node.inputs[0].meta["quant_parameter_tensor_names"]["finn_datatype"]
+    odt_str = last_node.outputs[0].meta["quant_parameter_tensor_names"]["finn_datatype"]
 
     log.info(f"match_loop_body_template_dtypes: template idt={idt_str}, odt={odt_str}")
 
@@ -83,11 +84,18 @@ def match_loop_body_template_dtypes(loop_body_template):
 
     # Here we know the output dtype can safely be narrowed to the input dtype
 
-    # Update the output tensor's finn_datatype metadata
+    # Update the last node's output tensor finn_datatype metadata
+    last_node.outputs[0].meta["quant_parameter_tensor_names"]["finn_datatype"] = idt_str
+
+    # Also update the graph-level input/output metadata, which build_loop_replace_pattern reads
+    if "quant_parameter_tensor_names" not in g.inputs[0].meta:
+        g.inputs[0].meta["quant_parameter_tensor_names"] = {}
+    g.inputs[0].meta["quant_parameter_tensor_names"]["finn_datatype"] = idt_str
+    if "quant_parameter_tensor_names" not in g.outputs[0].meta:
+        g.outputs[0].meta["quant_parameter_tensor_names"] = {}
     g.outputs[0].meta["quant_parameter_tensor_names"]["finn_datatype"] = idt_str
 
     # Update the last node's out_dtype attribute
-    last_node = g._nodes[-1]
     if "out_dtype" in last_node.attributes:
         last_node.attributes["out_dtype"] = ir.Attr("out_dtype", ir.AttributeType.STRING, idt_str)
         log.info(
