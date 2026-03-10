@@ -601,7 +601,14 @@ class HWCustomOp(CustomOp):
                 f"Period {period} too short to characterize {self.onnx_node.name} : "
                 f"expects min {n_inps} cycles"
             )
+
+        # NICCHANGE:
+        log.info(f"DeriveCharacteristic for {self.onnx_node.name} is expected to take {exp_cycles} cycles")
+
         sim = self.get_rtlsim()
+
+        # NICCHANGE: label the sim engine so cycle prints show which node is being simulated
+        sim.label = self.onnx_node.name
         if override_rtlsim_dict is not None:
             io_dict = override_rtlsim_dict
         else:
@@ -628,6 +635,8 @@ class HWCustomOp(CustomOp):
             txns_out[k] = sim.trace_stream(k + sname)  # type: ignore
         self.rtlsim_multi_io(sim, io_dict)
         total_cycle_count = cast("int", self.get_nodeattr("cycles_rtlsim"))
+        # NICCHANGE: print when node characterization is done
+        log.info(f"DeriveCharacteristic done for {self.onnx_node.name}: {total_cycle_count} cycles")
         assert (
             total_cycle_count <= period
         ), f"""Total cycle count from rtl simulation is higher than

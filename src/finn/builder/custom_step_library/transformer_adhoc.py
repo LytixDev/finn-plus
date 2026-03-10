@@ -47,6 +47,25 @@ from finn.transformation.streamline.absorb import AbsorbConsecutiveTransposes
 from finn.util.exception import FINNUserError
 
 
+# NICCHANGE: temporary. models is wrong.
+def _fix_mvau_weight_dtype(model: ModelWrapper):
+    # sets MVAU weightDataType to INT4 (which is correct)
+    # it is showing up as INT64 for some reason, but we know its INT4
+    for node in model.graph.node:
+        if "MVAU" in node.op_type:
+            inst = getCustomOp(node)
+            inst.set_nodeattr("weightDataType", "INT4")
+        elif node.op_type == "FINNLoop":
+            loop_model = getCustomOp(node).get_nodeattr("body")
+            _fix_mvau_weight_dtype(loop_model)
+            getCustomOp(node).set_nodeattr("body", loop_model.graph)
+    return model
+
+
+def step_fix_mvau_weight_dtype(model: ModelWrapper, cfg: DataflowBuildConfig):
+    return _fix_mvau_weight_dtype(model)
+
+
 def step_convert_to_hw(model: ModelWrapper, cfg: DataflowBuildConfig):
     # Start with inferring splitting and concatenating infrastructure operators
     # as these also address QONNX type inference defects.

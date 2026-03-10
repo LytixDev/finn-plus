@@ -386,6 +386,9 @@ def prepare_loop_ops_fifo_sizing(node, cfg):
             swg_exception=cfg.default_swg_exception,
             vivado_ram_style=cfg.large_fifo_mem_style,
             fifosim_input_throttle=cfg.fifosim_input_throttle,
+            # NICCHANGE: attention reads K before Q/V, but Q/K/V share upstream
+            # (ReplicateStream). Hail mary.
+            max_depth=32768,
         )
     )
     loop_model = loop_model.transform(SplitLargeFIFOs())
