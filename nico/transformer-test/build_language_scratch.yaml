@@ -1,0 +1,50 @@
+# Build config for finn-transformers language model (non-MLO)
+# Uses auto-folding from scratch (no pre-computed folding config)
+
+model_path: "../../models/transformer/finn-transformers/language/streamlined.onnx"
+output_dir: "output_language_scratch"
+
+board: "Pynq-Z1"
+shell_flow_type: "vivado_zynq"
+synth_clk_period_ns: 10.0
+
+# Auto-folding from scratch
+target_fps: 1000
+specialize_layers_config_file: "transformer_specialization.json"
+
+# Verification
+verify_input_npy: "../../models/transformer/finn-transformers/language/inp.npy"
+verify_expected_output_npy: "../../models/transformer/finn-transformers/language/out.npy"
+verification_atol: 0.5
+
+steps:
+  - finn.builder.passes.export
+  - step_qonnx_to_finn
+  - step_tidy_up
+  - step_streamline
+  - finn.builder.custom_step_library.transformer_adhoc.step_convert_to_hw
+  - step_create_dataflow_partition
+  - step_specialize_layers
+  - finn.builder.custom_step_library.transformer_adhoc.step_set_folding
+  - step_minimize_bit_width
+  - step_generate_estimate_reports
+  - step_hw_codegen
+  - step_hw_ipgen
+  - step_set_fifo_depths
+  - step_create_stitched_ip
+  #- step_measure_rtlsim_performance
+  - step_out_of_context_synthesis
+  #- step_synthesize_bitfile
+  #- step_make_driver
+  #- step_deployment_package
+
+generate_outputs:
+  - estimate_reports
+  - stitched_ip
+
+standalone_thresholds: true
+max_multithreshold_bit_width: 16
+mvau_wwidth_max: 2048
+split_large_fifos: true
+auto_fifo_depths: true
+save_intermediate_models: true
