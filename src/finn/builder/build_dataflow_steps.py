@@ -386,9 +386,6 @@ def prepare_loop_ops_fifo_sizing(node, cfg):
             swg_exception=cfg.default_swg_exception,
             vivado_ram_style=cfg.large_fifo_mem_style,
             fifosim_input_throttle=cfg.fifosim_input_throttle,
-            # NICCHANGE: attention reads K before Q/V, but Q/K/V share upstream
-            # (ReplicateStream). Hail mary.
-            max_depth=32768,
         )
     )
     loop_model = loop_model.transform(SplitLargeFIFOs())
@@ -1495,6 +1492,26 @@ def step_loop_rolling(model, cfg):
             match_loop_body_template_dtypes(loop_extraction.loop_body_template)
             model = model.transform(LoopRolling(loop_extraction.loop_body_template))
             move("loop-body-template.onnx", cfg.output_dir + "/loop-body-template.onnx")
+            # NICCHANGE: match_loop_body_template_dtypes may have narrowed the loop
+            # body output dtype (e.g. UINT32 -> UINT8). Update consumer nodes'
+            # inputDataType to match the FINNLoop's outputDataType.
+            for node in model.graph.node:
+                if node.op_type == "FINNLoop":
+                    loop_inst = getCustomOp(node)
+                    loop_odt = loop_inst.get_nodeattr("outputDataType")
+                    consumer = model.find_consumer(node.output[0])
+                    if consumer is not None:
+                        try:
+                            consumer_inst = getCustomOp(consumer)
+                            consumer_idt = consumer_inst.get_nodeattr("inputDataType")
+                            if consumer_idt != loop_odt:
+                                log.info(
+                                    f"Updating {consumer.name} inputDataType "
+                                    f"from {consumer_idt} to {loop_odt}"
+                                )
+                                consumer_inst.set_nodeattr("inputDataType", loop_odt)
+                        except AttributeError:
+                            pass
     else:
         log.info("MLO not selected, skipping step_loop_rolling.")
 

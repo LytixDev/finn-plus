@@ -109,7 +109,10 @@ class SimEngine:
 
             # Execute Cycle
             self.ticks += 1
-            print(f"Cycle {self.ticks}")
+            # NICCHANGE: only print every 10k cycles to avoid log spam
+            if self.ticks % 10000 == 0:
+                label = getattr(self, 'label', '')
+                print(f"Cycle {self.ticks}" + (f" [{label}]" if label else ""))
             strong = False
             for task in self.tasks:
                 # Tasks read signals and derive updates to schedule for after the clock cycle

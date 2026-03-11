@@ -54,7 +54,10 @@ def _fix_mvau_weight_dtype(model: ModelWrapper):
     for node in model.graph.node:
         if "MVAU" in node.op_type:
             inst = getCustomOp(node)
-            inst.set_nodeattr("weightDataType", "INT4")
+            if node.name == "MVAU_12":
+                inst.set_nodeattr("weightDataType", "INT8")
+            else:
+                inst.set_nodeattr("weightDataType", "INT4")
         elif node.op_type == "FINNLoop":
             loop_model = getCustomOp(node).get_nodeattr("body")
             _fix_mvau_weight_dtype(loop_model)
@@ -217,7 +220,9 @@ def step_set_folding(model: ModelWrapper, cfg: DataflowBuildConfig):
     # same target cycles
     # NICCHANGE: apply_to_subgraphs=True so FINNLoop body nodes get folded too
     model = model.transform(
-        SetFolding(target_cycles_per_frame, cfg.mvau_wwidth_max, cfg.folding_two_pass_relaxation),
+        #SetFolding(target_cycles_per_frame, cfg.mvau_wwidth_max, cfg.folding_two_pass_relaxation),
+        # NICCHANGE
+        SetFolding(target_cycles_per_frame, cfg.mvau_wwidth_max, two_pass_relaxation=False),
         apply_to_subgraphs=True,
     )
 
