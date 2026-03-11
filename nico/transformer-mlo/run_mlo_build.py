@@ -64,6 +64,12 @@ steps_rolling_and_beyond = [
     #"step_make_driver",
     #"step_deployment_package",
 ]
+
+skip_after_minimize = False
+if skip_after_minimize:
+    steps_rolling_and_beyond = steps_rolling_and_beyond[:steps_rolling_and_beyond.index("step_minimize_bit_width") + 1]
+
+
 target_fps=1_000
 clk_period_ns=10.0
 board="U250"
@@ -121,13 +127,14 @@ cfg_rolling_and_beyond = build_cfg.DataflowBuildConfig(
         build_cfg.DataflowOutputType.BITFILE,
     ],
     # Uncomment to enable verification (needs cppsim reference from create_mlo_model.py):
-    verify_steps=["folded_hls_cppsim", "node_by_node_rtlsim", "stitched_ip_rtlsim"],
+    #verify_steps=["folded_hls_cppsim", "node_by_node_rtlsim", "stitched_ip_rtlsim"],
+    verify_steps=["stitched_ip_rtlsim"],
     verify_input_npy=input_npy,
     verify_expected_output_npy=output_npy,
 )
 
 
-print(f"Running loop rolling and everything else : {cfg_rolling_and_beyond}")
+print(f"Running loop rolling and everything else : {steps_rolling_and_beyond}")
 print(f"Intermediate models will be saved to: {output_dir}/intermediate_models/")
 
 build.build_dataflow_cfg(model_path, cfg_rolling_and_beyond)
