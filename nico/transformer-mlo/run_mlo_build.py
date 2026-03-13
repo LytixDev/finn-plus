@@ -72,7 +72,8 @@ if skip_after_minimize:
 
 target_fps=1_000
 clk_period_ns=10.0
-board="U250"
+board="Pynq-Z1"
+shell_flow_type="zynq"
 rtl_sim_batch_size=10, # 100
 
 cfg_pre_rolling = build_cfg.DataflowBuildConfig(
@@ -81,6 +82,7 @@ cfg_pre_rolling = build_cfg.DataflowBuildConfig(
     target_fps=target_fps,
     synth_clk_period_ns=clk_period_ns,
     board=board,
+    shell_flow_type=shell_flow_type,
     rtlsim_batch_size=rtl_sim_batch_size,
     standalone_thresholds=True,
     specialize_layers_config_file="transformer_specialization.json",
@@ -100,7 +102,8 @@ cfg_pre_rolling = build_cfg.DataflowBuildConfig(
 print(f"Running steps up to loop rolling: {steps_pre_rolling}")
 print(f"Intermediate models will be saved to: {output_dir}/intermediate_models/")
 
-build.build_dataflow_cfg("streamlined.onnx", cfg_pre_rolling)
+# TODO: TMP
+#build.build_dataflow_cfg("streamlined.onnx", cfg_pre_rolling)
 
 model_path = f"{output_dir}/intermediate_models/step_specialize_layers.onnx"
 model = ModelWrapper(model_path)
@@ -108,9 +111,11 @@ loop_body_range = (model.graph.node[4], model.graph.node[33])
 cfg_rolling_and_beyond = build_cfg.DataflowBuildConfig(
     output_dir=output_dir,
     steps=steps_rolling_and_beyond,
+    start_step="step_out_of_context_synthesis", # TODO: Temp
     target_fps=target_fps,
     synth_clk_period_ns=clk_period_ns,
     board=board,
+    shell_flow_type=shell_flow_type,
     rtlsim_batch_size=rtl_sim_batch_size,
     standalone_thresholds=True,
     specialize_layers_config_file="transformer_specialization.json",
@@ -125,6 +130,8 @@ cfg_rolling_and_beyond = build_cfg.DataflowBuildConfig(
         build_cfg.DataflowOutputType.ESTIMATE_REPORTS,
         build_cfg.DataflowOutputType.STITCHED_IP,
         build_cfg.DataflowOutputType.BITFILE,
+        build_cfg.DataflowOutputType.RTLSIM_PERFORMANCE,
+        build_cfg.DataflowOutputType.OOC_SYNTH,
     ],
     # Uncomment to enable verification (needs cppsim reference from create_mlo_model.py):
     #verify_steps=["folded_hls_cppsim", "node_by_node_rtlsim", "stitched_ip_rtlsim"],
