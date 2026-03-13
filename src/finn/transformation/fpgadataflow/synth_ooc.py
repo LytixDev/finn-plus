@@ -1,4 +1,4 @@
-# Copyright (c) 2020, Xilinx
+# Copyright (c) 2020. Xilinx
 # All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
@@ -87,14 +87,23 @@ class SynthOutOfContext(Transformation):
                 copy2(file, build_dir)
         # extract additional tcl commands to set up floating-point ips correctly
         float_ip_tcl = []
-        for node in model.graph.node:
-            if is_hls_float_op(node, model):
-                code_gen_dir = getCustomOp(node).get_nodeattr("code_gen_dir_ipgen")
-                verilog_path = Path(f"{code_gen_dir}/project_{node.name}/sol1/impl/verilog/")
-                file_suffix = ".tcl"
-                for fname in verilog_path.iterdir():
-                    if fname.name.endswith(file_suffix):
-                        float_ip_tcl.append(str(fname))
+
+        # NICCHANGE: Also traverse FINNLoop body subgraphs to find float ops (like
+        # ScaledDotProductAttention). Without this, OOC synthesis fails because it can't find float
+        # IPs inside FINNLoops.
+        def collect_float_ip_tcl(nodes, node_model):
+            for node in nodes:
+                if node.op_type == "FINNLoop":
+                    loop_body = getCustomOp(node).get_nodeattr("body")
+                    collect_float_ip_tcl(loop_body.graph.node, loop_body)
+                elif is_hls_float_op(node, node_model):
+                    code_gen_dir = getCustomOp(node).get_nodeattr("code_gen_dir_ipgen")
+                    verilog_path = Path(f"{code_gen_dir}/project_{node.name}/sol1/impl/verilog/")
+                    for fname in verilog_path.iterdir():
+                        if fname.name.endswith(".tcl"):
+                            float_ip_tcl.append(str(fname))
+
+        collect_float_ip_tcl(model.graph.node, model)
         ret = out_of_context_synth(
             build_dir, top_module_name, float_ip_tcl, self.part, self.clk_name, self.clk_period_ns
         )
