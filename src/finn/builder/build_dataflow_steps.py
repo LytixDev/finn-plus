@@ -110,6 +110,9 @@ from finn.transformation.fpgadataflow.set_fifo_depths import (
     xsi_fifosim,
 )
 from finn.transformation.fpgadataflow.set_folding import SetFolding
+from finn.transformation.fpgadataflow.normalize_replicate_stream_outputs import (
+    NormalizeReplicateStreamOutputs,
+)
 from finn.transformation.fpgadataflow.set_loop_boundary import SetLoopBoundary
 from finn.transformation.fpgadataflow.specialize_layers import SpecializeLayers
 from finn.transformation.fpgadataflow.synth_ooc import SynthOutOfContext
@@ -1456,6 +1459,10 @@ def step_loop_rolling(model, cfg):
                 """MLO is selected but no loop range for the subgraph is specified,
                 this might cause an error during loop rolling."""
             )
+        # NICCHANGE: Normalize ReplicateStream output ordering so that the
+        #   skip/residual connection is always output[0]. 
+        model = model.transform(NormalizeReplicateStreamOutputs())
+
         if cfg.loop_body_hierarchy is not None:
             log.info(f"Running Loop Rolling on {cfg.loop_body_hierarchy} hierarchy")
             loop_extraction = LoopExtraction(cfg.loop_body_hierarchy)
