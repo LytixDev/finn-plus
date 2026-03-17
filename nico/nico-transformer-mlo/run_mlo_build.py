@@ -1,16 +1,26 @@
 # poetry run finn run run_mlo_build.py
-# Two-step process
-# First we run up until loop_rolling. Then we contunie from loop_rolling. 
-# This is necessary because the inputs to the build function needs the loop_body_range,
-# but these nodes are only available after running all transformations up until loop_rolling.
 
-# The model used here is from finn-transformers/language/
+# Model has been created using a modified version of the FINN-T repository
+# Specifically, certain quantizers across transformer layers are shared so that 
+# the scaled dot dot-product attention operator has constant inputs across loop iterations.
+# Even more specifically, thresholds_a_softmax, thresholds_av_matmul, must be shared.
+# This means the softmax output quantizer and the A*V matmul and V*activation matmul 
+# nodes have shared quantizers across layers.
+
+
+# TODO:
+# fix the vitis hls bug?
+#     - internal accumulator width is too large
+#     - the folding step must have this as a contraint?
+#     in SetFolding: 
+#       - Add a constraint in the PE phase that ensures PE * SIMD * weight_bits <= 8191
+#     - on idun, fails when target fps is 1000 but works when it is 500
 
 import os
 
 from qonnx.core.modelwrapper import ModelWrapper
 
-output_dir = os.environ.get("FINN_BUILD_DIR", "/tmp") + "/transformer-mlo"
+output_dir = os.environ.get("FINN_BUILD_DIR", "/tmp") + "/nico-transformer-mlo"
 os.makedirs(output_dir, exist_ok=True)
 print(f"Output dir: {output_dir}")
 
@@ -28,13 +38,14 @@ output_npy = "out.npy"
 #    print(f"  [{i}] {node.op_type} ({node.name})")
 
 steps_pre_rolling = [
-    "finn.builder.passes.export",
-    "step_qonnx_to_finn",
-    "step_tidy_up",
-    "step_streamline",
-    # Customized adhoc hardware conversion step: Includes inferring the fused
-    # operator for scaled dot-product attention
-    "finn.builder.custom_step_library.transformer_adhoc.step_convert_to_hw",
+    # NOTE: The commented out passes here are handled by the FINN-T frontend
+    #"finn.builder.passes.export",
+    #"step_qonnx_to_finn",
+    #"step_tidy_up",
+    #"step_streamline",
+    ## Customized adhoc hardware conversion step: Includes inferring the fused
+    ## operator for scaled dot-product attention
+    #"finn.builder.custom_step_library.transformer_adhoc.step_convert_to_hw",
 
     # This particular transformer model has weights tagged as INT64 when they should be INT4 or INT8
     # This sets the appropriate dtype before folding.
@@ -102,15 +113,14 @@ cfg_pre_rolling = build_cfg.DataflowBuildConfig(
 print(f"Running steps up to loop rolling: {steps_pre_rolling}")
 print(f"Intermediate models will be saved to: {output_dir}/intermediate_models/")
 
-build.build_dataflow_cfg("streamlined.onnx", cfg_pre_rolling)
+build.build_dataflow_cfg("step_convert_to_hw.onnx", cfg_pre_rolling)
 
 model_path = f"{output_dir}/intermediate_models/step_specialize_layers.onnx"
 model = ModelWrapper(model_path)
-loop_body_range = (model.graph.node[4], model.graph.node[33])
+loop_body_range = (model.graph.node[2], model.graph.node[30])
 cfg_rolling_and_beyond = build_cfg.DataflowBuildConfig(
     output_dir=output_dir,
     steps=steps_rolling_and_beyond,
-    #start_step="step_out_of_context_synthesis", # TODO: Temp
     target_fps=target_fps,
     synth_clk_period_ns=clk_period_ns,
     board=board,
