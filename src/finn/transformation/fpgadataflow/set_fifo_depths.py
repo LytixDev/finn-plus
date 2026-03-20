@@ -180,7 +180,7 @@ class CapConvolutionFIFODepths(Transformation):
 
     # TODO add unit test
 
-    def __init__(self, max_qsrl_depth: int = 256) -> None:
+    def __init__(self, max_qsrl_depth: int = 244) -> None:
         """Initialize CapConvolutionFIFODepths with the given maximum SRL FIFO depth."""
         super().__init__()
         self.max_qsrl_depth = max_qsrl_depth
@@ -299,7 +299,7 @@ class InsertAndSetFIFODepths(Transformation):
         self,
         fpgapart: str,
         clk_ns: float = 10.0,
-        max_qsrl_depth: int = 256,
+        max_qsrl_depth: int = 244,  # NICCHANGE: 256*4096 > Vivado SRL 1M limit
         max_depth: int | None = None,
         swg_exception: bool = False,
         vivado_ram_style: str = "auto",
@@ -609,7 +609,7 @@ class InsertAndSetFIFODepths(Transformation):
 
 
 def get_fifo_split_configs(
-    depth: int, max_qsrl_depth: int = 256, max_vivado_depth: int = 32768
+    depth: int, max_qsrl_depth: int = 244, max_vivado_depth: int = 32768
 ) -> list[tuple[int, str]]:
     """Break non-power-of-2 sized FIFO depths into several ones."""
 
@@ -675,7 +675,7 @@ class SplitLargeFIFOs(Transformation):
 
     """
 
-    def __init__(self, max_qsrl_depth: int = 256, max_vivado_depth: int = 32768) -> None:
+    def __init__(self, max_qsrl_depth: int = 244, max_vivado_depth: int = 32768) -> None:
         """Initialize SplitLargeFIFOs with maximum FIFO depth constraints."""
         super().__init__()
         self.max_qsrl_depth = max_qsrl_depth

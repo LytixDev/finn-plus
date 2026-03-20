@@ -979,7 +979,7 @@ def step_set_fifo_depths(model: ModelWrapper, cfg: DataflowBuildConfig):
             model = model.transform(
                 InsertFIFO(
                     vivado_ram_style=cfg.large_fifo_mem_style,
-                    max_qsrl_depth=256,
+                    max_qsrl_depth=244,  # NICCHANGE: 256*4096 > Vivado SRL 1M limit
                     create_shallow_fifos=True,
                 )
             )
