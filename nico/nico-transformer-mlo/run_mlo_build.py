@@ -17,6 +17,8 @@
 #     - on idun, fails when target fps is 1000 but works when it is 500
 
 import os
+# it times out at 1m
+os.environ["LIVENESS_THRESHOLD"] = "2000000" # 2m
 
 from qonnx.core.modelwrapper import ModelWrapper
 
@@ -69,23 +71,18 @@ steps_rolling_and_beyond = [
     "step_hw_ipgen",
     "step_set_fifo_depths",
     "step_create_stitched_ip",
-    "step_measure_rtlsim_performance",
+    #"step_measure_rtlsim_performance",
     "step_out_of_context_synthesis",
-    "step_synthesize_bitfile",
+    #"step_synthesize_bitfile",
     #"step_make_driver",
     #"step_deployment_package",
 ]
 
-skip_after_minimize = False
-if skip_after_minimize:
-    steps_rolling_and_beyond = steps_rolling_and_beyond[:steps_rolling_and_beyond.index("step_minimize_bit_width") + 1]
-
-
 target_fps=1_000
-clk_period_ns=10.0
-board="Pynq-Z1"
-shell_flow_type="zynq"
-rtl_sim_batch_size=10, # 100
+clk_period_ns=20.0 # 50 MHz
+board="U250"
+shell_flow_type="vitis_alveo"
+rtl_sim_batch_size=10 # 100
 
 cfg_pre_rolling = build_cfg.DataflowBuildConfig(
     output_dir=output_dir,
@@ -121,6 +118,7 @@ loop_body_range = (model.graph.node[2], model.graph.node[30])
 cfg_rolling_and_beyond = build_cfg.DataflowBuildConfig(
     output_dir=output_dir,
     steps=steps_rolling_and_beyond,
+    #start_step="step_out_of_context_synthesis", # TODO: TMP
     target_fps=target_fps,
     synth_clk_period_ns=clk_period_ns,
     board=board,
