@@ -1164,23 +1164,42 @@ def step_measure_rtlsim_performance(model: ModelWrapper, cfg: DataflowBuildConfi
     Depends on the DataflowOutputType.STITCHED_IP output product.
     """
 
-    if DataflowOutputType.RTLSIM_PERFORMANCE in cfg.generate_outputs and not is_mlo(model):
-        assert (
-            DataflowOutputType.STITCHED_IP in cfg.generate_outputs
-        ), "rtlsim_perf needs stitched IP"
-        report_dir = cfg.output_dir + "/report"
-        os.makedirs(report_dir, exist_ok=True)
-        rtlsim_bs = int(cfg.rtlsim_batch_size)
-        orig_rtlsim_trace_depth = get_rtlsim_trace_depth()
-        assert rtlsim_bs > 0, "rtlsim batch size must be >0"
-        if cfg.verify_save_rtlsim_waveforms:
-            # set depth to 3 for layer-by-layer visibility
-            os.environ["RTLSIM_TRACE_DEPTH"] = "3"
-            model.set_metadata_prop(
-                "rtlsim_trace",
-                "%s/rtlsim_perf_batch_%d.wdb" % (os.path.abspath(report_dir), rtlsim_bs),
-            )
+    if DataflowOutputType.RTLSIM_PERFORMANCE not in cfg.generate_outputs:
+        log.info(
+            """DataflowOutputType.RTLSIM_PERFORMANCE not in requested outputs,
+            skipping step_measure_rtlsim_performance."""
+        )
+        return model
 
+    assert (
+        DataflowOutputType.STITCHED_IP in cfg.generate_outputs
+    ), "rtlsim_perf needs stitched IP"
+    report_dir = cfg.output_dir + "/report"
+    os.makedirs(report_dir, exist_ok=True)
+    rtlsim_bs = int(cfg.rtlsim_batch_size)
+    orig_rtlsim_trace_depth = get_rtlsim_trace_depth()
+    assert rtlsim_bs > 0, "rtlsim batch size must be >0"
+    if cfg.verify_save_rtlsim_waveforms:
+        # set depth to 3 for layer-by-layer visibility
+        os.environ["RTLSIM_TRACE_DEPTH"] = "3"
+        model.set_metadata_prop(
+            "rtlsim_trace",
+            "%s/rtlsim_perf_batch_%d.wdb" % (os.path.abspath(report_dir), rtlsim_bs),
+        )
+
+    if is_mlo(model):
+        # NICCHANGE:
+        # Use the Python XSI path MLO.
+        # NOTE: memory accesses are zero-latency, so throughput is an upper bound.
+        #       consider modelling this?
+        from finn.core.throughput_test import throughput_test_rtlsim_mlo
+
+        perf_model = deepcopy(model)
+        perf_model.set_metadata_prop("exec_mode", "rtlsim")
+        rtlsim_perf_dict = throughput_test_rtlsim_mlo(
+            perf_model, cfg.synth_clk_period_ns, batchsize=rtlsim_bs
+        )
+    else:
         # Use critical path estimate to set the timeout limit for FIFO sim
         # TODO: This is a heuristic which usually overestimates the maximum
         #  cycles (by a lot), but can actually also underestimate causing
@@ -1218,17 +1237,11 @@ def step_measure_rtlsim_performance(model: ModelWrapper, cfg: DataflowBuildConfi
             runtime_s = (stablestate_cycles * clk_ns) * (10**-9)
             rtlsim_perf_dict["stable_throughput[images/s]"] = rtlsim_bs / runtime_s
 
-        with open(report_dir + "/rtlsim_performance.json", "w") as f:
-            json.dump(rtlsim_perf_dict, f, indent=2)
-        if cfg.verify_save_rtlsim_waveforms:
-            # restore original trace depth
-            os.environ["RTLSIM_TRACE_DEPTH"] = str(orig_rtlsim_trace_depth)
-
-    else:
-        log.info(
-            """DataflowOutputType.RTLSIM_PERFORMANCE not in requested outputs or model is MLO,
-            skipping step_measure_rtlsim_performance."""
-        )
+    with open(report_dir + "/rtlsim_performance.json", "w") as f:
+        json.dump(rtlsim_perf_dict, f, indent=2)
+    if cfg.verify_save_rtlsim_waveforms:
+        # restore original trace depth
+        os.environ["RTLSIM_TRACE_DEPTH"] = str(orig_rtlsim_trace_depth)
 
     return model
 
