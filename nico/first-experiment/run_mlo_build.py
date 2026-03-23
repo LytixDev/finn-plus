@@ -17,18 +17,15 @@
 #     - on idun, fails when target fps is 1000 but works when it is 500
 
 import os
-import argparse
 
 # it times out at 1m
 os.environ["LIVENESS_THRESHOLD"] = "2000000" # 2m
 
-parser = argparse.ArgumentParser()
-parser.add_argument("model_index", type=int, choices=range(6), help="Model index (0-5)")
-args = parser.parse_args()
+model_index = 0
 
 from qonnx.core.modelwrapper import ModelWrapper
 
-output_dir = os.environ.get("FINN_BUILD_DIR", "/tmp") + "/0"
+output_dir = os.environ.get("FINN_BUILD_DIR", "/tmp") + "/" + str(model_index)
 os.makedirs(output_dir, exist_ok=True)
 print(f"Output dir: {output_dir}")
 
@@ -116,7 +113,7 @@ cfg_pre_rolling = build_cfg.DataflowBuildConfig(
 print(f"Running steps up to loop rolling: {steps_pre_rolling}")
 print(f"Intermediate models will be saved to: {output_dir}/intermediate_models/")
 
-input_model = f"models/{args.model_index}/build/intermediate_models/step_convert_to_hw.onnx"
+input_model = f"models/{model_index}/build/intermediate_models/step_convert_to_hw.onnx"
 if not os.path.isfile(input_model):
     raise FileNotFoundError(f"Input model not found: {input_model}")
 build.build_dataflow_cfg(input_model, cfg_pre_rolling)

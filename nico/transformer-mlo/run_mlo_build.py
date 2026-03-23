@@ -58,7 +58,7 @@ steps_rolling_and_beyond = [
     "step_hw_ipgen",
     "step_set_fifo_depths",
     "step_create_stitched_ip",
-    "step_measure_rtlsim_performance",
+    #"step_measure_rtlsim_performance",
     "step_out_of_context_synthesis",
     "step_synthesize_bitfile",
     #"step_make_driver",
@@ -72,9 +72,9 @@ if skip_after_minimize:
 
 target_fps=1_000
 clk_period_ns=10.0
-board="Pynq-Z1"
-shell_flow_type="zynq"
-rtl_sim_batch_size=10, # 100
+board="U250"
+shell_flow_type="vitis_alveo"
+rtl_sim_batch_size=10 # 100
 
 cfg_pre_rolling = build_cfg.DataflowBuildConfig(
     output_dir=output_dir,
