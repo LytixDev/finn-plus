@@ -85,6 +85,7 @@ def throughput_test_rtlsim(model, clk_ns, batchsize=100):
 
 # NICCHANGE:
 # TODO: Unify
+# TODO: Think about batchsize and fill latency
 def throughput_test_rtlsim_mlo(model, clk_ns, batchsize=1):
     """Throughput test for an MLO IP-stitched model using the Python XSI path with AXI-MM prehooks for weight and intermediate activation memory.
     NOTE: memory accesses are zero-latency 

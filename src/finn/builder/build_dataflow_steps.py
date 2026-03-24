@@ -1194,11 +1194,23 @@ def step_measure_rtlsim_performance(model: ModelWrapper, cfg: DataflowBuildConfi
         #       consider modelling this?
         from finn.core.throughput_test import throughput_test_rtlsim_mlo
 
+        # Compute a liveness threshold from the analytical cycle estimate
+        # so the watchdog doesn't fire before the first output appears.
+        model = model.transform(AnnotateCycles())
+        liveness = get_liveness_threshold_cycles()
+        perf = model.analysis(dataflow_performance)
+        latency = perf["critical_path_cycles"]
+        max_iters = max(liveness, int(np.ceil(latency * 1.1 + 50)))
+        log.info(f"Temporarily setting LIVENESS_THRESHOLD to {max_iters} (from analytical estimate)")
+        os.environ["LIVENESS_THRESHOLD"] = str(max_iters)
+
         perf_model = deepcopy(model)
         perf_model.set_metadata_prop("exec_mode", "rtlsim")
         rtlsim_perf_dict = throughput_test_rtlsim_mlo(
             perf_model, cfg.synth_clk_period_ns, batchsize=rtlsim_bs
         )
+        # Restore original liveness threshold
+        os.environ["LIVENESS_THRESHOLD"] = str(liveness)
     else:
         # Use critical path estimate to set the timeout limit for FIFO sim
         # TODO: This is a heuristic which usually overestimates the maximum
