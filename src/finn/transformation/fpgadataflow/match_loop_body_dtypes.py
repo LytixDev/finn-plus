@@ -173,6 +173,7 @@ class EnforceLoopBodyDtypeConstraint(Transformation):
     Is automatically ran after step_minimize_bit_width when MLO is active.
     """
 
+    # TODO: This whole thing is super hacky and needs some thought and love
     def apply(self, model):
         for node in model.graph.node:
             if node.op_type != "FINNLoop":
@@ -273,5 +274,31 @@ class EnforceLoopBodyDtypeConstraint(Transformation):
                 # didn't do this properly
                 inst.set_nodeattr("inputDataType", idt.name)
                 inst.set_nodeattr("outputDataType", idt.name)
+
+            finnloop_idt = DataType[inst.get_nodeattr("inputDataType")]
+            finnloop_odt = DataType[inst.get_nodeattr("outputDataType")]
+
+            producer = model.find_producer(node.input[0])
+            if producer is not None:
+                producer_inst = getCustomOp(producer)
+                if producer_inst.get_output_datatype(0) != finnloop_idt:
+                    log.info(
+                        f"  Widening producer {producer.name} ({producer.op_type}) "
+                        f"output dtype from {producer_inst.get_output_datatype(0)} to {finnloop_idt}"
+                    )
+                    _set_node_output_dtype(producer_inst, finnloop_idt)
+                    model.set_tensor_datatype(node.input[0], finnloop_idt)
+
+            consumers = model.find_consumers(node.output[0])
+            if consumers:
+                for consumer in consumers:
+                    consumer_inst = getCustomOp(consumer)
+                    if consumer_inst.get_input_datatype(0) != finnloop_odt:
+                        log.info(
+                            f"  Widening consumer {consumer.name} ({consumer.op_type}) "
+                            f"input dtype from {consumer_inst.get_input_datatype(0)} to {finnloop_odt}"
+                        )
+                        _set_node_input_dtype(consumer_inst, finnloop_odt)
+                        model.set_tensor_datatype(node.output[0], finnloop_odt)
 
         return model, False
