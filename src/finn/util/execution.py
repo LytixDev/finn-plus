@@ -59,7 +59,7 @@ def load_model_checkpoint(filename):
         raise FileNotFoundError(f"Model file {filename} not found")
 
 
-def execute_parent(parent_path, child_path, input_tensor_npy, return_full_ctx=False):
+def execute_parent(parent_path, child_path, input_tensor_npy, return_full_ctx=False, pre_hook=None):
     """Execute parent model containing a single StreamingDataflowPartition by
     replacing it with the model at child_path and return result.
 
@@ -80,7 +80,7 @@ def execute_parent(parent_path, child_path, input_tensor_npy, return_full_ctx=Fa
     sdp_node = getCustomOp(sdp_node)
     sdp_node.set_nodeattr("model", child_path)
     sdp_node.set_nodeattr("return_full_exec_context", 1 if return_full_ctx else 0)
-    ret = execute_onnx(parent_model, {iname: input_tensor_npy}, True)
+    ret = execute_onnx(parent_model, {iname: input_tensor_npy}, True, pre_hook=pre_hook)
     if return_full_ctx:
         return ret
     else:
