@@ -203,6 +203,13 @@ class ScaledDotProductAttention(HWCustomOp):
         except AttributeError:
             return 1
 
+    # NICCHANGE: Helper to build proper shape tuples that omit the iterations dimension when Heads=1
+    # NOTE: Probably no needed when we fix the unroll head stuff in FINN-T
+    def _iter_shape(self, *rest):
+        if self.iterations == 1:
+            return rest
+        return (self.iterations, *rest)
+
     # Returns an ONNX node that has the same shape inference behavior
     def make_shape_compatible_op(self, model):
         # Infer the output shape from the input shapes
@@ -483,15 +490,16 @@ class ScaledDotProductAttention(HWCustomOp):
     # Gets the shape of the input at index ind without folding
     def get_normal_input_shape(self, ind=0):
         # List shapes of inputs in order
+        # NICCHANGE: use _iter_shape to omit Heads dim when Heads=1
         inputs_shapes = [
             # Query input sequence
-            (self.iterations, self.get_nodeattr("QLen"),
+            self._iter_shape(self.get_nodeattr("QLen"),
              self.get_nodeattr("QKDim")),
             # Key input sequence
-            (self.iterations, self.get_nodeattr("KVLen"),
+            self._iter_shape(self.get_nodeattr("KVLen"),
              self.get_nodeattr("QKDim")),
             # Value input sequence
-            (self.iterations, self.get_nodeattr("KVLen"),
+            self._iter_shape(self.get_nodeattr("KVLen"),
              self.get_nodeattr("VDim")),
         ]
 
@@ -533,14 +541,16 @@ class ScaledDotProductAttention(HWCustomOp):
     def get_normal_output_shape(self, ind=0):  # noqa, there is just one output
         # The output shape is inferred from the length of the query sequence and
         # the embedding dimension of the values
-        return (self.iterations, self.get_nodeattr("QLen"),
+        # NICCHANGE: use _iter_shape to omit Heads dim when Heads=1
+        return self._iter_shape(self.get_nodeattr("QLen"),
                 self.get_nodeattr("VDim"))
 
     # Gets the shape of the attention weights at index ind (there is just one)
     # without folding
     def get_normal_attention_shape(self, ind=0):  # noqa, there is just one
         # The attention weights have shape covering both sequence dimensions
-        return (self.iterations, self.get_nodeattr("QLen"),
+        # NICCHANGE: use _iter_shape to omit Heads dim when Heads=1
+        return self._iter_shape(self.get_nodeattr("QLen"),
                 self.get_nodeattr("KVLen"))
 
     # Gets the shape of the input at index ind with folding

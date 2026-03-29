@@ -368,7 +368,7 @@ compilation transformations?
                 # Convert the input to floating point representation as the
                 # container datatype
                 inp_val = inp_val.astype(np.float32)
-            assert inp_val.shape == exp_ishape, "Input shape doesn't match expected shape."
+            assert inp_val.shape == exp_ishape, f"Input shape doesn't match expected shape. Node {node.name} input {i}: got {inp_val.shape}, expected {exp_ishape}"
             export_idt = self.get_input_datatype(i)
 
             if export_idt == DataType["BIPOLAR"]:
