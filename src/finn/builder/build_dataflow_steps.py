@@ -183,7 +183,10 @@ def verify_step(
                 )
                 log.info("Attempting to force model shape on verification input")
                 in_npy = in_npy.reshape(exp_ishape)
-            out_dict = execute_parent(parent_model_fn, child_model_fn, in_npy, return_full_ctx=True)
+            out_dict = execute_parent(
+                parent_model_fn, child_model_fn, in_npy,
+                return_full_ctx=True, pre_hook=rtlsim_pre_hook,
+            )
             out_npy = out_dict[out_tensor_name]
         else:
             inp_tensor_name = model.get_first_global_in()
@@ -196,12 +199,8 @@ def verify_step(
                 log.info("Attempting to force model shape on verification input")
                 in_npy = in_npy.reshape(exp_ishape)
             inp_dict = {inp_tensor_name: in_npy}
-            if rtlsim_pre_hook is not None:
-                rtlsim_exec(model, inp_dict, pre_hook=rtlsim_pre_hook)
-                out_npy = inp_dict[out_tensor_name]
-            else:
-                out_dict = execute_onnx(model, inp_dict, True)
-                out_npy = out_dict[out_tensor_name]
+            out_dict = execute_onnx(model, inp_dict, True, pre_hook=rtlsim_pre_hook)
+            out_npy = out_dict[out_tensor_name]
         exp_oshape = exp_out_npy.shape
         if out_npy.shape != exp_oshape:
             log.warning(
@@ -1075,13 +1074,6 @@ def step_set_fifo_depths(model: ModelWrapper, cfg: DataflowBuildConfig):
     return model
 
 
-def verify_mlo(model: ModelWrapper, cfg: DataflowBuildConfig, step: str):
-    finn_loop = model.get_nodes_by_op_type("FINNLoop")
-    # TODO: allow for multiple FINNLoops
-    mlo_prehook = mlo_prehook_func_factory(finn_loop[0])
-    verify_step(model, cfg, "stitched_ip_rtlsim", need_parent=False, rtlsim_pre_hook=mlo_prehook)
-
-
 def step_create_stitched_ip(model: ModelWrapper, cfg: DataflowBuildConfig):
     """Create stitched IP for a graph after all HLS IP blocks have been generated.
     Depends on the DataflowOutputType.STITCHED_IP output product."""
@@ -1151,10 +1143,13 @@ def step_create_stitched_ip(model: ModelWrapper, cfg: DataflowBuildConfig):
             os.makedirs(verify_out_dir, exist_ok=True)
             abspath = os.path.abspath(verify_out_dir)
             verify_model.set_metadata_prop("rtlsim_trace", abspath + "/verify_rtlsim.wdb")
+        # NICCHANGE:
+        mlo_prehook = None
         if is_mlo(model):
-            verify_mlo(verify_model, cfg, "stitched_ip_rtlsim")
-        else:
-            verify_step(verify_model, cfg, "stitched_ip_rtlsim", need_parent=True)
+            finn_loop = verify_model.get_nodes_by_op_type("FINNLoop")
+            # TODO: allow for multiple FINNLoops
+            mlo_prehook = mlo_prehook_func_factory(finn_loop[0])
+        verify_step(verify_model, cfg, "stitched_ip_rtlsim", need_parent=True, rtlsim_pre_hook=mlo_prehook)
         os.environ["LIVENESS_THRESHOLD"] = str(liveness)
     return model
 
