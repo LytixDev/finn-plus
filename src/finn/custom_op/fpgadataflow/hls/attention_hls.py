@@ -204,7 +204,9 @@ class ScaledDotProductAttention_hls(  # noqa: Class name does not follow
                 " AccQKMatMul,"
                 " OutQKMatMul,"
                 f" {bias},"
-                f" comp::less<{dtype_str}, {dtype_str}>",
+                # NICCHANGE: use less_equal to match Python multithreshold (>=)
+                # comp::less gives strict > which disagrees at boundary values
+                f" comp::less_equal<{dtype_str}, {dtype_str}>",
                 ">"
             ])
 
@@ -243,7 +245,8 @@ class ScaledDotProductAttention_hls(  # noqa: Class name does not follow
                 " AccASoftmax,"
                 " AType,"
                 f" {bias},"
-                f" comp::less<{dtype_str}, {dtype_str}>",
+                # NICCHANGE: use less_equal to match Python multithreshold (>=)
+                f" comp::less_equal<{dtype_str}, {dtype_str}>",
                 ">"
             ])
 
@@ -282,7 +285,8 @@ class ScaledDotProductAttention_hls(  # noqa: Class name does not follow
                 " AccAVMatMul,"
                 " OutAVMatMul,"
                 f" {bias},"
-                f" comp::less<{dtype_str}, {dtype_str}>",
+                # NICCHANGE: use less_equal to match Python multithreshold (>=)
+                f" comp::less_equal<{dtype_str}, {dtype_str}>",
                 ">"
             ])
 
