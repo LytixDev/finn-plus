@@ -201,20 +201,31 @@ class FINNLoop(HWCustomOp, RTLBackend):
         return inst.get_folded_output_shape(0)
 
     def infer_node_datatype(self, model):
-        pass
+        # NICCHANGE: Implemented.
+        node = self.onnx_node
+        # set inputDataType from upstream node's output
+        idt = model.get_tensor_datatype(node.input[0])
+        if idt != self.get_input_datatype():
+            self.set_nodeattr("inputDataType", idt.name)
+
+        # Run InferDataTypes on the loop body first, so child nodes are up-to-date before we read 
+        # the output dtype from the last node. This means InferDataTypes() are called twice on
+        # the loop body (if apply_to_subgraphs=True), but so be it.
+        from qonnx.transformation.infer_datatypes import InferDataTypes
+
+        loop_body = self.get_nodeattr("body")
+        # Update the datatype for the first node in the loop body
+        loop_body.set_tensor_datatype(loop_body.graph.input[0].name, idt)
+        loop_body = loop_body.transform(InferDataTypes())
+        self.set_nodeattr("body", loop_body.model.graph)
+        odt = self.get_output_datatype()
+        self.set_nodeattr("outputDataType", odt.name)
+        model.set_tensor_datatype(node.output[0], odt)
 
     def get_input_datatype(self, ind=0):
         """Returns FINN DataType of input."""
         if ind == 0:
-            # NICCHANGE: The loop body node attribute's inputDataType is old and not up to date
-            #            instead we grab the first node in the loop body and use that.
-            #            I suppose it would be better to actually make the loop nodes' inputDataType
-            #            attribute up to date. Look into it later. Similar to get_output_datatype.
-            # idt = DataType[self.get_nodeattr("inputDataType")]
-            loop_body = self.get_nodeattr("body")
-            node = loop_body.graph.node[0]
-            inst = getCustomOp(node)
-            idt = inst.get_input_datatype(0)
+            idt = DataType[self.get_nodeattr("inputDataType")]
         else:
             loop_body = self.get_nodeattr("body")
             tensor = loop_body.graph.input[ind].name
@@ -228,16 +239,8 @@ class FINNLoop(HWCustomOp, RTLBackend):
         return idt
 
     def get_output_datatype(self, ind=0):
-        # NICCHANGE: The loop body node attribute's outputDataType is old and not up to date
-        #            instead we grab the final node in the loop body and use that.
-        #            I suppose it would be better to actually make the loop nodes' outputDataType 
-        #            attribute up to date. Look into it later.
-        # odt = DataType[self.get_nodeattr("outputDataType")]
-        # return odt
-        loop_body = self.get_nodeattr("body")
-        node = loop_body.graph.node[-1]
-        inst = getCustomOp(node)
-        return inst.get_output_datatype(0)
+        odt = DataType[self.get_nodeattr("outputDataType")]
+        return odt
 
     def get_instream_width(self, ind=0):
         loop_body = self.get_nodeattr("body")
