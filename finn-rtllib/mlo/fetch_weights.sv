@@ -53,7 +53,10 @@ module fetch_weights #(
     // Safely deducible parameters
     int unsigned              DS_BITS_BA = (SIMD*WEIGHT_WIDTH+7)/8 * 8,
 	int unsigned              WS_BITS_BA = (PE*SIMD*WEIGHT_WIDTH+7)/8 * 8,
-    logic[ADDR_BITS-1:0]      LAYER_OFFS = ((MH*MW*WEIGHT_WIDTH+7)/8) & ~7 // 8-byte aligned
+    // LAYER_OFFS must account for byte-alignment padding of individual SIMD-group tiles.
+    // Raw packing (MH*MW*WEIGHT_WIDTH/8) is wrong when SIMD*WEIGHT_WIDTH < 8 because the
+    // DWC outputs DS_BITS_BA-wide words (byte-aligned per tile), not tightly packed bits.
+    logic[ADDR_BITS-1:0]      LAYER_OFFS = ((MH*MW/SIMD * (DS_BITS_BA/8)) + 7) & ~7 // 8-byte aligned
 ) (
     input  logic                        aclk,
     input  logic                        aresetn,
@@ -109,7 +112,7 @@ module fetch_weights #(
     output logic[WS_BITS_BA-1:0]        m_axis_tdata
 );
 
-localparam int unsigned WMAT_SIZE = ((MH*MW*WEIGHT_WIDTH+7)/8) & ~7;
+localparam int unsigned WMAT_SIZE = ((MH*MW/SIMD * (DS_BITS_BA/8)) + 7) & ~7;
 
 // Offsets
 logic [N_LAYERS-1:0][ADDR_BITS-1:0] l_offsets;
