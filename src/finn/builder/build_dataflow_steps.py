@@ -88,7 +88,7 @@ from finn.transformation.fpgadataflow.insert_tlastmarker import InsertTLastMarke
 from finn.transformation.fpgadataflow.loop_rolling import LoopExtraction, LoopRolling
 from finn.transformation.fpgadataflow.match_loop_body_dtypes import (
     EnforceLoopBodyDtypeConstraints,
-    match_loop_body_template_dtypes,
+    enforce_loop_body_template_dtype_constraints,
 )
 from finn.transformation.fpgadataflow.make_driver import (
     MakeCPPDriver,
@@ -1487,36 +1487,17 @@ def step_loop_rolling(model, cfg):
             log.info(f"Running Loop Rolling on {cfg.loop_body_hierarchy} hierarchy")
             loop_extraction = LoopExtraction(cfg.loop_body_hierarchy)
             model = model.transform(loop_extraction)
-            # TODO: Ignored for now.
             # NICCHANGE: LoopExtraction picks one block as the template. Its first and last node
-            #            have different dtypes. MLO requires these dtypes to be an exact match. 
-            #            Furthermore, it requires them to by byte-aligned (as MLO uses AXI-MM where
-            #            the data bus must be byte-aligned). 
-            #match_loop_body_template_dtypes(loop_extraction.loop_body_template)
+            #            may have different dtypes. MLO requires these dtypes to be an exact match
+            #            and byte-aligned (AXI-MM). Enforce before LoopRolling which asserts idt==odt.
+            enforce_loop_body_template_dtype_constraints(loop_extraction.loop_body_template)
             model = model.transform(LoopRolling(loop_extraction.loop_body_template))
             move("loop-body-template.onnx", cfg.output_dir + "/loop-body-template.onnx")
 
-            # TODO: Ignored for now.
-            # NICCHANGE: match_loop_body_template_dtypes may have altered the loop bodies input
-            #            output dtypes. This change must be propagated to the produer and consumer
-            #            node above and below the FINNLoop node.
-            # for node in model.graph.node:
-            #     if node.op_type == "FINNLoop":
-            #         loop_inst = getCustomOp(node)
-            #         loop_odt = loop_inst.get_nodeattr("outputDataType")
-            #         consumer = model.find_consumer(node.output[0])
-            #         if consumer is not None:
-            #             try:
-            #                 consumer_inst = getCustomOp(consumer)
-            #                 consumer_idt = consumer_inst.get_nodeattr("inputDataType")
-            #                 if consumer_idt != loop_odt:
-            #                     log.info(
-            #                         f"Updating {consumer.name} inputDataType "
-            #                         f"from {consumer_idt} to {loop_odt}"
-            #                     )
-            #                     consumer_inst.set_nodeattr("inputDataType", loop_odt)
-            #             except AttributeError:
-            #                 pass
+            # NICCHANGE: enforce_loop_body_template_dtype_constraints may have changed the
+            #            loop body I/O dtypes. Propagate to producer/consumer nodes in the
+            #            parent graph.
+            model = model.transform(EnforceLoopBodyDtypeConstraints())
     else:
         log.info("MLO not selected, skipping step_loop_rolling.")
 

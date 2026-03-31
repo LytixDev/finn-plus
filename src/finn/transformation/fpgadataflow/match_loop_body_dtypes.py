@@ -1,5 +1,6 @@
 from onnxscript import ir
 from qonnx.core.datatype import DataType
+from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
 from qonnx.transformation.base import Transformation
 from qonnx.transformation.infer_datatypes import InferDataTypes
@@ -36,18 +37,18 @@ def _set_node_output_dtype(node_inst, dt):
 
 
 # NICCHANGE:
-def match_loop_body_template_dtypes(loop_body_template):
-    """
+def enforce_loop_body_template_dtype_constraints(loop_body_template):
+    """Enforce the same constraints as EnforceLoopBodyDtypeConstraints, but on a
+    LoopBodyTemplate (onnxscript IR) before LoopRolling runs.
+
     Constraints:
         1. input and output dtype must match exactly
         2. this dtype must be byte aligned
 
-    If constraint 1. and 2. is not met, find the most narrow valid byte-aligned dtype.
-
-    TODO: If any dtypes are updated, this must also be progated in the model.
-    TODO: If the signedness differs we will error. Something to look into later. 
+    If not met, find the smallest valid byte-aligned dtype (wider of the two),
+    propagate it through the template's intermediate nodes via InferDataTypes,
+    and rebuild the template's pattern/function.
     """
-    # Relax dtype requirements for input and output streams by upcasting
     g = loop_body_template._ir_graph
 
     first_node = g._nodes[0]
@@ -55,68 +56,88 @@ def match_loop_body_template_dtypes(loop_body_template):
     idt_str = first_node.inputs[0].meta["quant_parameter_tensor_names"]["finn_datatype"]
     odt_str = last_node.outputs[0].meta["quant_parameter_tensor_names"]["finn_datatype"]
 
-    log.info(f"match_loop_body_template_dtypes: template idt={idt_str}, odt={odt_str}")
+    log.info(f"enforce_loop_body_template_dtype_constraints: template idt={idt_str}, odt={odt_str}")
 
-    if idt_str == odt_str:
-        log.info("match_loop_body_template_dtypes: dtypes already match, nothing to do")
+    idt = DataType[idt_str]
+    odt = DataType[odt_str]
+
+    # Constraint 1: pick the wider of the two
+    if idt != odt:
+        wider = idt if idt.bitwidth() >= odt.bitwidth() else odt
+        log.warning(
+            f"enforce_loop_body_template_dtype_constraints: "
+            f"mismatched dtypes: input={idt}, output={odt}. "
+            f"Widening both to {wider}."
+        )
+        idt = wider
+        odt = wider
+
+    # Constraint 2: byte-align
+    target_dt = _next_byte_aligned_dtype(odt)
+    if target_dt != odt:
+        log.warning(
+            f"enforce_loop_body_template_dtype_constraints: "
+            f"non-byte-aligned I/O dtype {odt} ({odt.bitwidth()} bits). "
+            f"Upcasting to {target_dt} ({target_dt.bitwidth()} bits)."
+        )
+
+    if target_dt == DataType[idt_str] and target_dt == DataType[odt_str]:
+        log.info("enforce_loop_body_template_dtype_constraints: constraints already met")
         return
 
-    log.warning("match_loop_body_template_dtypes: TODO: loop body idt != odt")
-    return
-    # TODO: This branch of the function is stupid and not properly tested. Fix later.
-    # idt = DataType[idt_str]
-    # last_node = g._nodes[-1]
+    target_dt_str = target_dt.name
 
-    # minimal_odt = _derive_minimal_odt_from_ir(last_node)
-    # if minimal_odt is not None:
-    #     log.info(f"match_loop_body_template_dtypes: minimal output dtype = {minimal_odt}")
-    #     if not dtype_fits_in(minimal_odt, idt):
-    #         raise ValueError(
-    #             f"match_loop_body_template_dtypes: Cannot match loop body dtypes. "
-    #             f"Minimal output dtype {minimal_odt} does not fit in input dtype {idt}. "
-    #             f"Output range [{minimal_odt.min()}, {minimal_odt.max()}] exceeds "
-    #             f"input range [{idt.min()}, {idt.max()}]."
-    #         )
-    # else:
-    #     log.warning(
-    #         f"match_loop_body_template_dtypes: Cannot derive minimal output dtype for "
-    #         f"{last_node.op_type}."
-    #     )
-    #     return
+    # Serialize the template to protobuf, wrap in ModelWrapper, propagate dtypes,
+    # then deserialize back to IR.
+    loop_body_template.update()
+    model = ModelWrapper(loop_body_template._model_proto)
 
-    # # Here we know the output dtype can safely be narrowed to the input dtype
+    # Set the input tensor dtype and run InferDataTypes to propagate
+    model.set_tensor_datatype(model.graph.input[0].name, target_dt)
+    model = model.transform(InferDataTypes())
 
-    # # Update the last node's output tensor finn_datatype metadata
-    # last_node.outputs[0].meta["quant_parameter_tensor_names"]["finn_datatype"] = idt_str
+    # Override the last node's output dtype to target_dt
+    last_node_proto = model.graph.node[-1]
+    last_inst = getCustomOp(last_node_proto)
+    _set_node_output_dtype(last_inst, target_dt)
+    model.set_tensor_datatype(last_node_proto.output[0], target_dt)
 
-    # # Also update the graph-level input/output metadata, which build_loop_replace_pattern reads
-    # if "quant_parameter_tensor_names" not in g.inputs[0].meta:
-    #     g.inputs[0].meta["quant_parameter_tensor_names"] = {}
-    # g.inputs[0].meta["quant_parameter_tensor_names"]["finn_datatype"] = idt_str
-    # if "quant_parameter_tensor_names" not in g.outputs[0].meta:
-    #     g.outputs[0].meta["quant_parameter_tensor_names"] = {}
-    # g.outputs[0].meta["quant_parameter_tensor_names"]["finn_datatype"] = idt_str
+    # Deserialize back to IR and update the template
+    import onnxscript
+    loop_body_template._model_proto = model.model
+    loop_body_template._ir_model = onnxscript.ir.serde.deserialize_model(model.model)
+    loop_body_template._ir_graph = loop_body_template._ir_model.graph
 
-    # # Update the last node's out_dtype attribute
-    # if "out_dtype" in last_node.attributes:
-    #     last_node.attributes["out_dtype"] = ir.Attr("out_dtype", ir.AttributeType.STRING, idt_str)
-    #     log.info(
-    #         f"match_loop_body_template_dtypes: Updated last node {last_node.op_type} "
-    #         f"out_dtype from {odt_str} to {idt_str}"
-    #     )
-    # elif "outputDataType" in last_node.attributes:
-    #     last_node.attributes["outputDataType"] = ir.Attr(
-    #         "outputDataType", ir.AttributeType.STRING, idt_str
-    #     )
-    #     log.info(
-    #         f"match_loop_body_template_dtypes: Updated last node {last_node.op_type} "
-    #         f"outputDataType from {odt_str} to {idt_str}"
-    #     )
-    # else:
-    #     log.warning(
-    #         f"match_loop_body_template_dtypes: Last node {last_node.op_type} has no "
-    #         f"out_dtype or outputDataType attribute to update"
-    #     )
+    # Update IR-level finn_datatype metadata on graph inputs/outputs
+    # (build_loop_replace_pattern reads these)
+    for inp in loop_body_template._ir_graph.inputs:
+        if "quant_parameter_tensor_names" not in inp.meta:
+            inp.meta["quant_parameter_tensor_names"] = {}
+        inp.meta["quant_parameter_tensor_names"]["finn_datatype"] = target_dt_str
+    for out in loop_body_template._ir_graph.outputs:
+        if "quant_parameter_tensor_names" not in out.meta:
+            out.meta["quant_parameter_tensor_names"] = {}
+        out.meta["quant_parameter_tensor_names"]["finn_datatype"] = target_dt_str
+
+    # Also update the first/last node's tensor metadata
+    first_node = loop_body_template._ir_graph._nodes[0]
+    last_node = loop_body_template._ir_graph._nodes[-1]
+    first_node.inputs[0].meta["quant_parameter_tensor_names"]["finn_datatype"] = target_dt_str
+    last_node.outputs[0].meta["quant_parameter_tensor_names"]["finn_datatype"] = target_dt_str
+
+    # Rebuild pattern and function from the updated IR graph
+    loop_body_template._ir_graph.sort()
+    from finn.util import onnxscript_helpers as osh
+    loop_body_template.pattern = osh.direct_convert_ir_graph_to_pattern(
+        loop_body_template._ir_graph
+    )
+    loop_body_template.function = loop_body_template._build_ir_function()
+    loop_body_template.function_replace = loop_body_template._build_function_replace_pattern()
+
+    log.info(
+        f"enforce_loop_body_template_dtype_constraints: "
+        f"updated template dtypes to {target_dt_str}"
+    )
 
 
 class EnforceLoopBodyDtypeConstraints(Transformation):
