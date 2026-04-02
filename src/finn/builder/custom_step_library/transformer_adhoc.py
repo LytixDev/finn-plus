@@ -226,6 +226,13 @@ def step_set_folding(model: ModelWrapper, cfg: DataflowBuildConfig):
         apply_to_subgraphs=True,
     )
 
+    # NICCHANGE: commented out
+    perf_dict = model.analysis(dataflow_performance)
+    max_cycles = perf_dict["max_cycles"]
+    from finn.util.logging import log
+    log.info(f"max_cycles: {max_cycles}, target_cycles_per_frame: {target_cycles_per_frame}")
+    log.info(perf_dict)
+    """ 
     # Two-pass relaxation for attention operators: Redo folding settings
     # with lower target based on cycles of the slowest operator
     if cfg.folding_two_pass_relaxation:
@@ -238,6 +245,7 @@ def step_set_folding(model: ModelWrapper, cfg: DataflowBuildConfig):
             # Set folding to lower target cycles for all attention operators
             # in the model
             model = _set_folding_attention(model, perf_dict["max_cycles"])
+    """
 
     # TODO: The following export of auto_folding_config.yaml is largely redundant
     # because later steps generate a final_hw_config.json, so it may be removed
