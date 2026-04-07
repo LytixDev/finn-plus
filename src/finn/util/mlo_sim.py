@@ -30,6 +30,7 @@
 # This module contains helpers for handling the MLO rtlsimulation. It instantiates
 # aximm simulation tasks for handling the aximm interfaces.
 
+import os
 import numpy as np
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
@@ -90,8 +91,10 @@ def mlo_prehook_func_factory(node) -> Callable[[SimEngine], None]:
             extern_idx += 1
 
     def mlo_rtlsim_prehook(sim):
-        sim.aximm_queue("m_axi_hbm")
+        # NICCHANGE: Optional simulation of off-chip memory latency.
+        mem_latency = int(os.environ.get("MLO_MEM_LATENCY_CYCLES", "0"))
+        sim.aximm_queue("m_axi_hbm", latency_cycles=mem_latency)
         for name, intf in mvau_hbm_weights.items():
-            sim.aximm_ro_image(intf["extern_name"], 0, intf["value"].flatten())
+            sim.aximm_ro_image(intf["extern_name"], 0, intf["value"].flatten(), latency_cycles=mem_latency)
 
     return mlo_rtlsim_prehook

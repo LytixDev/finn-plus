@@ -109,8 +109,8 @@ class SimEngine:
 
             # Execute Cycle
             self.ticks += 1
-            # NICCHANGE: only print every 10k cycles to avoid log spam
-            if self.ticks % 10000 == 0:
+            # NICCHANGE: print every 50k cycles so we can visualize progress easily
+            if self.ticks % 50_000 == 0:
                 label = getattr(self, 'label', '')
                 print(f"Cycle {self.ticks}" + (f" [{label}]" if label else ""))
             strong = False
@@ -413,9 +413,10 @@ class SimEngine:
         self.enlist(ret)
         return ret
 
-    def aximm_ro_image(self, mm_axi, base, img):
+    # NICCHANGE: optional latency_cycles parameter that "simulates" off-chip memory latencies
+    def aximm_ro_image(self, mm_axi, base, img, latency_cycles=0):
         class AximmRoImage:
-            def __init__(self, top, mm_axi, base, img):
+            def __init__(self, top, mm_axi, base, img, latency_cycles=0):
                 self.mm_axi = mm_axi
                 self.rd_count = 0
                 # Tie off Write Channels
@@ -445,6 +446,7 @@ class SimEngine:
 
                 # Hold on to Image
                 self.base = base
+                self.latency_cycles = latency_cycles
                 self.img = [f"{_:02x}" for _ in np.array(img).astype(np.uint8)]
                 # This is a hack to account for the minimum DMA burst read size of 32 bytes.
                 for i in range(32):
@@ -460,20 +462,27 @@ class SimEngine:
                 # Push out Read Replies
                 if self.rready.read().as_bool() or not self.rvalid.as_bool():
                     if len(self.queue) > 0:
-                        # Work on Head of Queue
-                        addr, length, size = self.queue.pop(0)
-                        data = ""
-                        for i in range(size):
-                            data = self.img[addr] + data
-                            addr += 1
-                        ret[self.rdata] = data
+                        addr, length, size, eligible = self.queue[0]
+                        # NICCHANGE: Make sure the data has arrived
+                        if sim.ticks >= eligible:
+                            self.queue.pop(0)
+                            # Work on Head of Queue
+                            data = ""
+                            for i in range(size):
+                                data = self.img[addr] + data
+                                addr += 1
+                            ret[self.rdata] = data
 
-                        if length > 1:
-                            self.queue.insert(0, (addr, length - 1, size))
-                            ret[self.rlast] = "0"
+                            if length > 1:
+                                # In this model, subsequent beats after the first one have no latency
+                                self.queue.insert(0, (addr, length - 1, size, 0))
+                                ret[self.rlast] = "0"
+                            else:
+                                ret[self.rlast] = "1"
+                            ret[self.rvalid] = "1"
                         else:
-                            ret[self.rlast] = "1"
-                        ret[self.rvalid] = "1"
+                            if self.rvalid.as_bool():
+                                ret[self.rvalid] = "0"
 
                     elif self.rvalid.as_bool():
                         # Silent Reply Interface
@@ -498,20 +507,22 @@ class SimEngine:
                         print(f"Range extends beyond range {addr=} {length=} {size=}")
                         # assert addr + length * size < len(self.img), "Read extends beyond range."
 
-                    self.queue.append((addr, length, size))
+                    self.queue.append((addr, length, size, sim.ticks + self.latency_cycles))
 
                 return ret
 
-        ret = AximmRoImage(self, mm_axi, base, img)
+        ret = AximmRoImage(self, mm_axi, base, img, latency_cycles)
         self.enlist(ret)
         return ret
 
-    def aximm_queue(self, mm_axi):
+    # NICCHANGE: Optional latency, see aximm_ro_image.
+    def aximm_queue(self, mm_axi, latency_cycles=0):
         "Pick up all write requests to carry them over to complete"
         " a later read request with the same address and size."
 
         class AximmQueue:
-            def __init__(self, top, mm_axi):
+            def __init__(self, top, mm_axi, latency_cycles=0):
+                self.latency_cycles = latency_cycles
                 # Collect Ports of Read Channels
                 for name in (
                     "awready",
@@ -583,18 +594,25 @@ class SimEngine:
                 # Push out Read Replies
                 if self.rready.read().as_bool() or not self.rvalid.as_bool():
                     if len(self.ra_queue) > 0:
-                        # Work on Head of Queue
-                        addr, length, size0 = self.ra_queue.pop(0)
-                        assert addr in self.map, "Missing data entry"
-                        data, size = self.map[addr]
-                        assert size == size0, "Write and read size mismatch."
-                        ret[self.rdata] = data
-                        if length > 1:
-                            self.ra_queue.insert(0, (addr + size, length - 1, size))
-                            ret[self.rlast] = "0"
+                        # NICCHANGE:
+                        addr, length, size0, eligible = self.ra_queue[0]
+                        if sim.ticks >= eligible:
+                            self.ra_queue.pop(0)
+                            # Work on Head of Queue
+                            assert addr in self.map, "Missing data entry"
+                            data, size = self.map[addr]
+                            assert size == size0, "Write and read size mismatch."
+                            ret[self.rdata] = data
+                            if length > 1:
+                                # Subsequent beats have no extra latency
+                                self.ra_queue.insert(0, (addr + size, length - 1, size, 0))
+                                ret[self.rlast] = "0"
+                            else:
+                                ret[self.rlast] = "1"
+                            ret[self.rvalid] = "1"
                         else:
-                            ret[self.rlast] = "1"
-                        ret[self.rvalid] = "1"
+                            if self.rvalid.as_bool():
+                                ret[self.rvalid] = "0"
                     elif self.rvalid.as_bool():
                         # Silent Reply Interface
                         ret[self.rvalid] = "0"
@@ -627,8 +645,8 @@ class SimEngine:
                     addr = int(self.araddr.read().as_hexstr(), 16)
                     length = 1 + self.arlen.read().as_unsigned()
                     size = 2 ** self.arsize.read().as_unsigned()
-                    self.ra_queue.append((addr, length, size))
+                    self.ra_queue.append((addr, length, size, sim.ticks + self.latency_cycles))
 
                 return ret
 
-        self.enlist(AximmQueue(self, mm_axi))
+        self.enlist(AximmQueue(self, mm_axi, latency_cycles))
