@@ -1207,42 +1207,62 @@ def step_measure_rtlsim_performance(model: ModelWrapper, cfg: DataflowBuildConfi
         # Restore original liveness threshold
         os.environ["LIVENESS_THRESHOLD"] = str(liveness)
     else:
-        # Use critical path estimate to set the timeout limit for FIFO sim
-        # TODO: This is a heuristic which usually overestimates the maximum
-        #  cycles (by a lot), but can actually also underestimate causing
-        #  incorrect detection of timeouts. In these cases, this estimation can
-        #  be overwritten by setting LIVENESS_THRESHOLD to a very large value.
+        # NICCHANGE: Use the same Python XSI path as MLO (just without the prehook) for a more apples-to-apples comparison.
+        from finn.core.throughput_test import throughput_test_rtlsim
+
         model = model.transform(AnnotateCycles())
         liveness = get_liveness_threshold_cycles()
         perf = model.analysis(dataflow_performance)
         latency = perf["critical_path_cycles"]
         max_iters = max(liveness, int(np.ceil(latency * 1.1 + 50)))
+        log.info(f"Temporarily setting LIVENESS_THRESHOLD to {max_iters} (from analytical estimate)")
+        os.environ["LIVENESS_THRESHOLD"] = str(max_iters)
 
-        rtlsim_perf_dict = xsi_fifosim(model, rtlsim_bs, max_iters=max_iters)
-        # keep keys consistent between the Python and C++-styles
-        cycles = rtlsim_perf_dict["cycles"]
-        clk_ns = cfg.synth_clk_period_ns
-        fclk_mhz = 1 / (clk_ns * 0.001)
-        runtime_s = (cycles * clk_ns) * (10**-9)
-        rtlsim_perf_dict["runtime[ms]"] = runtime_s * 1000
-        rtlsim_perf_dict["throughput[images/s]"] = rtlsim_bs / runtime_s
-        rtlsim_perf_dict["fclk[mhz]"] = fclk_mhz
-        for key, val in rtlsim_perf_dict.items():
-            if "max_count" in key:
-                del rtlsim_perf_dict[key]
-        # estimate stable-state throughput based on latency+throughput
-        if rtlsim_bs == 1:
-            rtlsim_perf_dict["stable_throughput[images/s]"] = rtlsim_perf_dict[
-                "throughput[images/s]"
-            ]
-        else:
-            total_cycles = rtlsim_perf_dict["cycles"]
-            latency_cycles = rtlsim_perf_dict["latency_cycles"]
-            stablestate_cycles = total_cycles - latency_cycles
-            clk_ns = cfg.synth_clk_period_ns
-            fclk_mhz = 1 / (clk_ns * 0.001)
-            runtime_s = (stablestate_cycles * clk_ns) * (10**-9)
-            rtlsim_perf_dict["stable_throughput[images/s]"] = rtlsim_bs / runtime_s
+        perf_model = deepcopy(model)
+        perf_model.set_metadata_prop("exec_mode", "rtlsim")
+        rtlsim_perf_dict = throughput_test_rtlsim(
+            perf_model, cfg.synth_clk_period_ns, batchsize=rtlsim_bs
+        )
+        os.environ["LIVENESS_THRESHOLD"] = str(liveness)
+
+        # This is the C++ XSI fifosim path:
+
+        # # Use critical path estimate to set the timeout limit for FIFO sim
+        # # TODO: This is a heuristic which usually overestimates the maximum
+        # #  cycles (by a lot), but can actually also underestimate causing
+        # #  incorrect detection of timeouts. In these cases, this estimation can
+        # #  be overwritten by setting LIVENESS_THRESHOLD to a very large value.
+        # model = model.transform(AnnotateCycles())
+        # liveness = get_liveness_threshold_cycles()
+        # perf = model.analysis(dataflow_performance)
+        # latency = perf["critical_path_cycles"]
+        # max_iters = max(liveness, int(np.ceil(latency * 1.1 + 50)))
+        #
+        # rtlsim_perf_dict = xsi_fifosim(model, rtlsim_bs, max_iters=max_iters)
+        # # keep keys consistent between the Python and C++-styles
+        # cycles = rtlsim_perf_dict["cycles"]
+        # clk_ns = cfg.synth_clk_period_ns
+        # fclk_mhz = 1 / (clk_ns * 0.001)
+        # runtime_s = (cycles * clk_ns) * (10**-9)
+        # rtlsim_perf_dict["runtime[ms]"] = runtime_s * 1000
+        # rtlsim_perf_dict["throughput[images/s]"] = rtlsim_bs / runtime_s
+        # rtlsim_perf_dict["fclk[mhz]"] = fclk_mhz
+        # for key, val in rtlsim_perf_dict.items():
+        #     if "max_count" in key:
+        #         del rtlsim_perf_dict[key]
+        # # estimate stable-state throughput based on latency+throughput
+        # if rtlsim_bs == 1:
+        #     rtlsim_perf_dict["stable_throughput[images/s]"] = rtlsim_perf_dict[
+        #         "throughput[images/s]"
+        #     ]
+        # else:
+        #     total_cycles = rtlsim_perf_dict["cycles"]
+        #     latency_cycles = rtlsim_perf_dict["latency_cycles"]
+        #     stablestate_cycles = total_cycles - latency_cycles
+        #     clk_ns = cfg.synth_clk_period_ns
+        #     fclk_mhz = 1 / (clk_ns * 0.001)
+        #     runtime_s = (stablestate_cycles * clk_ns) * (10**-9)
+        #     rtlsim_perf_dict["stable_throughput[images/s]"] = rtlsim_bs / runtime_s
 
     with open(report_dir + "/rtlsim_performance.json", "w") as f:
         json.dump(rtlsim_perf_dict, f, indent=2)
