@@ -189,6 +189,19 @@ class SetFolding(Transformation):
                         break
                 # increase PE until target met or reached max_pe
                 self.optimize_attribute_val(node_inst, max_pe, "PE")
+                # NICCHANGE: 
+                # TODO: This is just for the HLS variants, right?
+                # ap_uint bitwidth is capped at 8191.
+                # The weight stream width is PE * SIMD * weight_bits and must not exceed this limit.
+                # Reduce PE if necessary.
+                wdt_bits = node_inst.get_input_datatype(1).bitwidth()
+                simd_val = node_inst.get_nodeattr("SIMD")
+                pe_val = node_inst.get_nodeattr("PE")
+                if pe_val * simd_val * wdt_bits > 8191:
+                    for candidate_pe in reversed(list(divisors(max_pe))):
+                        if candidate_pe * simd_val * wdt_bits <= 8191:
+                            node_inst.set_nodeattr("PE", candidate_pe)
+                            break
             elif op_type in pe_ops:
                 # Note: Keep original behavior for all custom-ops defining the
                 # NumChannels attribute as it is
