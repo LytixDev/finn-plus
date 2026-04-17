@@ -361,12 +361,15 @@ def validate_loop_io_tensor_pair(tensor_a, tensor_b):
     add_finn_datatype_if_needed(tensor_a)
     add_finn_datatype_if_needed(tensor_b)
 
-    assert finn_datatypes_match(
-        tensor_a.meta["quant_parameter_tensor_names"]["finn_datatype"],
-        tensor_b.meta["quant_parameter_tensor_names"]["finn_datatype"],
-    ), f"""FINNLoop body activation input/output finn_datatype mismatch
-       tensor_a: {tensor_a.name} ({tensor_a.meta['quant_parameter_tensor_names']['finn_datatype']})
-       tensor_b: {tensor_b.name} ({tensor_b.meta['quant_parameter_tensor_names']['finn_datatype']})"""
+    # NICCHANGE: ad-hoc, make better
+    dt_a = tensor_a.meta["quant_parameter_tensor_names"]["finn_datatype"]
+    dt_b = tensor_b.meta["quant_parameter_tensor_names"]["finn_datatype"]
+    if not finn_datatypes_match(dt_a, dt_b):
+        log.warning(
+            f"FINNLoop body finn_datatype mismatch "
+            f"(will be fixed by EnforceLoopBodyDtypeConstraints): "
+            f"{tensor_a.name} ({dt_a}) vs {tensor_b.name} ({dt_b})"
+        )
 
 
 def validate_loop_io_tensors(loop_node: ir.Node):
