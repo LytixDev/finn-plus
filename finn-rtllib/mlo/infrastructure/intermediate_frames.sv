@@ -146,6 +146,21 @@ Q_srl #(
     .o_d(), .o_v(), .o_r(rd_done)
 );
 
+// NICCHANGE:
+// Decouples write-side FSM from MUX backpressure on m_idx. 
+// Fixes the circular dependency between DEMUX push and MUX drain causing deadlocks when QDEPTH was not sufficient.
+logic m_idx_q_in_tvalid, m_idx_q_in_tready;
+logic [IDX_BITS-1:0] m_idx_q_in_tdata;
+
+Q_srl #(
+    .depth(N_OUTSTANDING_DMAS), .width(IDX_BITS)
+) inst_queue_m_idx (
+    .clock(aclk), .reset(!aresetn),
+    .count(), .maxcount(),
+    .i_d(m_idx_q_in_tdata), .i_v(m_idx_q_in_tvalid), .i_r(m_idx_q_in_tready),
+    .o_d(m_idx_tdata), .o_v(m_idx_tvalid), .o_r(m_idx_tready)
+);
+
 // FSM
 typedef enum logic[0:0] {ST_WR_IDLE, ST_WR_SEND} state_wr_t;
 state_wr_t state_wr_C = ST_WR_IDLE, state_wr_N;
@@ -181,7 +196,7 @@ always_comb begin: NSL_WR
 
     case (state_wr_C)
         ST_WR_IDLE:
-            state_wr_N = (idx_in_tvalid && m_idx_tready) ? ST_WR_SEND : ST_WR_IDLE;
+            state_wr_N = (idx_in_tvalid && m_idx_q_in_tready) ? ST_WR_SEND : ST_WR_IDLE;
 
         ST_WR_SEND:
             state_wr_N = (wr_rdy && s0_dma_in_tready) ? ST_WR_IDLE : ST_WR_SEND;
@@ -193,8 +208,8 @@ always_comb begin: DP_WR
     wr_ptr_N = wr_ptr_C;
 
     idx_in_tready = 1'b0;
-    m_idx_tvalid = 1'b0;
-    m_idx_tdata = idx_in_tdata + 1;
+    m_idx_q_in_tvalid = 1'b0;
+    m_idx_q_in_tdata = idx_in_tdata + 1;
 
     s0_dma_in_tvalid = 1'b0;
     s0_dma_in_tdata = l_offsets[wr_ptr_C];
@@ -203,9 +218,9 @@ always_comb begin: DP_WR
     case (state_wr_C)
         ST_WR_IDLE: begin
             if(idx_in_tvalid) begin
-                m_idx_tvalid = 1'b1;
+                m_idx_q_in_tvalid = 1'b1;
 
-                if(m_idx_tready) begin
+                if(m_idx_q_in_tready) begin
                     idx_in_tready = 1'b1;
                 end
             end
