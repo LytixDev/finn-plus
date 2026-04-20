@@ -225,6 +225,15 @@ def _set_folding_attention(model: ModelWrapper, target_cycles_per_frame,
     return model.transform(AnnotateCycles())
 
 
+def _critical_path_node_count(model: ModelWrapper) -> int:
+    depth: dict[str, int] = {}
+    for node in model.graph.node:
+        predecessors = model.find_direct_predecessors(node)
+        max_pred = 0 if not predecessors else max(depth.get(p.name, 0) for p in predecessors)
+        depth[node.name] = 1 + max_pred
+    return max(depth.values()) if depth else 1
+
+
 def step_set_folding(model: ModelWrapper, cfg: DataflowBuildConfig):
     # Resolve the target cycles per from the build configuration, considering
     # clock and target throughput
@@ -243,25 +252,32 @@ def step_set_folding(model: ModelWrapper, cfg: DataflowBuildConfig):
     model = _set_folding_attention(model, target_cycles_per_frame)
 
     # NICCHANGE: Also set attention folding inside FINNLoop bodies
+    from finn.util.logging import log
     for node in model.graph.node:
         if node.op_type == "FINNLoop":
             node_inst = getCustomOp(node)
             iterations = node_inst.get_nodeattr("iteration")
             loop_model = node_inst.get_nodeattr("body")
-            # To achieve target fps, each node in the FINNLoop must operate at 
-            # target_cycles_per_frame // iteration.
-            loop_model = _set_folding_attention(loop_model, target_cycles_per_frame // iterations )
+            k = _critical_path_node_count(loop_model)
+            #loop_target = target_cycles_per_frame // (iterations * k)
+            loop_target = target_cycles_per_frame // iterations
+            log.info(
+                f"FINNLoop {node.name}: critical path length k={k}, "
+                f"iterations={iterations}, loop-body target cycles={loop_target}"
+            )
+            loop_model = _set_folding_attention(loop_model, loop_target)
+            loop_model = loop_model.transform(
+                SetFolding(loop_target, cfg.mvau_wwidth_max, two_pass_relaxation=False),
+            )
             node_inst.set_nodeattr("body", loop_model.graph)
 
     # Use FINN auto-folding to configure all other operators to reach the
-    # same target cycles
-    # NICCHANGE: apply_to_subgraphs=True so FINNLoop body nodes get folded too
+    # target cycles. Top-level uses target_cycles_per_frame; each FINNLoop body
+    # uses its tighter target_cycles_per_frame // (iterations * k).
     model = model.transform(
-        #SetFolding(target_cycles_per_frame, cfg.mvau_wwidth_max, cfg.folding_two_pass_relaxation),
-        # NICCHANGE
         SetFolding(target_cycles_per_frame, cfg.mvau_wwidth_max, two_pass_relaxation=False),
-        apply_to_subgraphs=True,
     )
+
     # AnnotateCycles needs to run one final time since we have recursed into subgraphs
     model = model.transform(AnnotateCycles())
 
