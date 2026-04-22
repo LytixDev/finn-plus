@@ -347,7 +347,9 @@ module mvu_vvu_axi #(
 			/* else */    3 + $clog2(SIMD+1) + (SIMD == 1);
 
 		// This is conservative and could be divided by a guaranteed minimum output interval, e.g. MW/SIMD.
-		localparam int unsigned  MAX_IN_FLIGHT = CORE_PIPELINE_DEPTH;
+        // NICCHANGE:
+		// +2 accounts for backpressure-propagation latency.
+		localparam int unsigned  MAX_IN_FLIGHT = CORE_PIPELINE_DEPTH + 2;
 		typedef logic [PE-1:0][ACCU_WIDTH-1:0]  output_t;
 
 		logic signed [$clog2(MAX_IN_FLIGHT+1):0]  OPtr = '1;	// -1 | 0, 1, ..., MAX_IN_FLIGHT
