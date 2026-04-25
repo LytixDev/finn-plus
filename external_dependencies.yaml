@@ -15,8 +15,8 @@ git_deps:
         pip_install: False
         install_editable: False
     attention-hlslib:
-        url: "https://github.com/iksnagreb/attention-hlslib.git"
-        commit: "afc9720f10e551e1f734e137b21bb6d0a8342177"
+        url: "https://github.com/LytixDev/attention-hlslib.git"
+        commit: "aeed7110b8e5bedb91c1225090ce3919251aa6c2"
         pip_install: False
         install_editable: False
 
