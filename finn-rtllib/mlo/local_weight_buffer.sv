@@ -287,7 +287,7 @@ for(genvar i = 0; i < 2; i++) begin
         ram_p_c #(
             .ADDR_BITS(WGT_ADDR_BITS),
             .DATA_BITS(RAM_BITS),
-            .RAM_STYLE("block")
+            .RAM_STYLE("auto")
         ) inst_ram_tp_c (
             .clk(clk),
             .a_en(1'b1),

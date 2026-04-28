@@ -46,6 +46,7 @@ from finn.transformation.streamline import RoundAndClipThresholds
 from finn.transformation.streamline.absorb import AbsorbConsecutiveTransposes
 from finn.util.exception import FINNUserError
 from finn.util.fpgadataflow import is_hls_node, is_rtl_node
+from finn.util.logging import log
 
 
 # NICCHANGE: temporary. models is wrong.
@@ -166,8 +167,6 @@ def _attention_tile_widths(inst, embfold, seqfold):
 
 def _set_folding_attention(model: ModelWrapper, target_cycles_per_frame,
                            max_stream_width=_ATTENTION_MAX_STREAM_WIDTH):
-    from finn.util.logging import log
-
     # Run over all nodes in the model graph to look for attention operators,
     # which are currently not handled by the SetFolding transformation
     for index, node in enumerate(model.graph.node):
@@ -235,6 +234,8 @@ def _critical_path_node_count(model: ModelWrapper) -> int:
 
 
 def step_set_folding(model: ModelWrapper, cfg: DataflowBuildConfig):
+    #log.info(f"two_pass_relaxation = {cfg.folding_two_pass_relaxation}")
+    cfg.folding_two_pass_relaxation = False
     # Resolve the target cycles per from the build configuration, considering
     # clock and target throughput
     target_cycles_per_frame = cfg._resolve_cycles_per_frame()
@@ -251,8 +252,7 @@ def step_set_folding(model: ModelWrapper, cfg: DataflowBuildConfig):
     # Set folding to target cycles for all attention operators in the model
     model = _set_folding_attention(model, target_cycles_per_frame)
 
-    # NICCHANGE: Also set attention folding inside FINNLoop bodies
-    from finn.util.logging import log
+    # NICCHANGE: Also set folding of FINNLoop bodies
     for node in model.graph.node:
         if node.op_type == "FINNLoop":
             node_inst = getCustomOp(node)
@@ -266,29 +266,27 @@ def step_set_folding(model: ModelWrapper, cfg: DataflowBuildConfig):
                 f"iterations={iterations}, loop-body target cycles={loop_target}"
             )
             loop_model = _set_folding_attention(loop_model, loop_target)
+            # TODO: Experiment with two_pass_relaxation for the loop body as well
             loop_model = loop_model.transform(
                 SetFolding(loop_target, cfg.mvau_wwidth_max, two_pass_relaxation=False),
             )
             node_inst.set_nodeattr("body", loop_model.graph)
 
-    # Use FINN auto-folding to configure all other operators to reach the
-    # target cycles. Top-level uses target_cycles_per_frame; each FINNLoop body
-    # uses its tighter target_cycles_per_frame // (iterations * k).
-    model = model.transform(
-        SetFolding(target_cycles_per_frame, cfg.mvau_wwidth_max, two_pass_relaxation=False),
-    )
-
-    # AnnotateCycles needs to run one final time since we have recursed into subgraphs
+    # Run AnnotateCycles after all FINNLoop's have been folded
     model = model.transform(AnnotateCycles())
 
-    # NICCHANGE: commented out
+    # Use FINN auto-folding to configure all other operators to reach the target cycles. 
+    model = model.transform(
+        SetFolding(target_cycles_per_frame, cfg.mvau_wwidth_max, 
+                   two_pass_relaxation=cfg.folding_two_pass_relaxation),
+    )
+
     perf_dict = model.analysis(dataflow_performance)
     max_cycles = perf_dict["max_cycles"]
-    from finn.util.logging import log
     log.info(f"max_cycles: {max_cycles}, target_cycles_per_frame: {target_cycles_per_frame}")
     log.info(perf_dict)
 
-    """ 
+    # NICCHANGE TODO: Do this for the loop body as well?
     # Two-pass relaxation for attention operators: Redo folding settings
     # with lower target based on cycles of the slowest operator
     if cfg.folding_two_pass_relaxation:
@@ -301,7 +299,6 @@ def step_set_folding(model: ModelWrapper, cfg: DataflowBuildConfig):
             # Set folding to lower target cycles for all attention operators
             # in the model
             model = _set_folding_attention(model, perf_dict["max_cycles"])
-    """
 
     # TODO: The following export of auto_folding_config.yaml is largely redundant
     # because later steps generate a final_hw_config.json, so it may be removed
