@@ -577,6 +577,12 @@ class DataflowBuildConfig(DataClassJSONMixin, DataClassYAMLMixin):
     #: loop_body_hierarchy and loop_body_range
     mlo: bool = False
 
+    #: (Only relevant when mlo is True)
+    #: When True, FIFO sizing skips RTL simulation around each FINNLoop and sizes these FIFOs
+    #: analytically instead. Body-internal FIFOs are still sized normally by prepare_loop_ops_fifo_sizing.
+    #: This is fine when the FINNLoop has trivial dataflow above and below it.
+    pure_mlo: bool = False
+
     #: A List of strings that specify the PyTorch metadata hierarchy to
     #: be used for the loop body hierarchy. Each item in the list should
     #: be a string that represents a level in the hierarchy.

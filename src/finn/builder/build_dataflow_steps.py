@@ -962,7 +962,34 @@ def step_set_fifo_depths(model: ModelWrapper, cfg: DataflowBuildConfig):
 
     if cfg.auto_fifo_depths:
         strategy = cfg.auto_fifo_strategy
-        if strategy == "characterize" or is_mlo(model):
+        if cfg.pure_mlo and is_mlo(model):
+            # NICCHANGE:
+            # Body-internal FIFOs are already sized by prepare_loop_ops_fifo_sizing in step_hw_codegen. 
+            # Here we only need boundary FIFOs around each FINNLoop sized to one folded frame on each side.
+            for node in model.graph.node:
+                if node.op_type == "FINNLoop":
+                    inst = getCustomOp(node)
+                    folded_in = int(np.prod(inst.get_folded_input_shape(0)[:-1]))
+                    folded_out = int(np.prod(inst.get_folded_output_shape(0)[:-1]))
+                    in_depths = list(inst.get_nodeattr("inFIFODepths"))
+                    out_depths = list(inst.get_nodeattr("outFIFODepths"))
+                    in_depths[0] = max(folded_in, 2)
+                    out_depths[0] = max(folded_out, 2)
+                    inst.set_nodeattr("inFIFODepths", [int(d) for d in in_depths])
+                    inst.set_nodeattr("outFIFODepths", [int(d) for d in out_depths])
+
+            model = model.transform(InsertDWC())
+            model = model.transform(
+                InsertFIFO(
+                    vivado_ram_style=cfg.large_fifo_mem_style,
+                    max_qsrl_depth=244,
+                    create_shallow_fifos=True,
+                )
+            )
+            model = model.transform(SpecializeLayers(cfg._resolve_fpga_part()))
+            model = model.transform(GiveUniqueNodeNames())
+            model = model.transform(GiveReadableTensorNames())
+        elif strategy == "characterize" or is_mlo(model):
             model = model.transform(InsertDWC())
             model = model.transform(SpecializeLayers(cfg._resolve_fpga_part()))
             model = model.transform(GiveUniqueNodeNames())
