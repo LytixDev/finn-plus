@@ -30,6 +30,7 @@ import numpy as np
 from qonnx.util.basic import gen_finn_dt_tensor
 
 from finn.core.rtlsim_exec import rtlsim_exec
+from finn.util.mlo_sim import mlo_prehook_func_factory
 
 
 def throughput_test_rtlsim(model, clk_ns, batchsize=100):
@@ -66,6 +67,63 @@ def throughput_test_rtlsim(model, clk_ns, batchsize=100):
         o_bytes += (np.prod(oshape_batch) * odt.bitwidth()) / 8
 
     rtlsim_exec(model, ctx)
+    # extract metrics
+    cycles = int(model.get_metadata_prop("cycles_rtlsim"))
+    fclk_mhz = 1 / (clk_ns * 0.001)
+    runtime_s = (cycles * clk_ns) * (10**-9)
+    res = dict()
+    res["cycles"] = cycles
+    res["runtime[ms]"] = runtime_s * 1000
+    res["throughput[images/s]"] = batchsize / runtime_s
+    res["DRAM_in_bandwidth[MB/s]"] = i_bytes * 0.000001 / runtime_s
+    res["DRAM_out_bandwidth[MB/s]"] = o_bytes * 0.000001 / runtime_s
+    res["fclk[mhz]"] = fclk_mhz
+    res["N"] = batchsize
+
+    return res
+
+
+# NICCHANGE:
+# TODO: Unify
+# TODO: Think about batchsize and fill latency
+def throughput_test_rtlsim_mlo(model, clk_ns, batchsize=1):
+    """Throughput test for an MLO IP-stitched model using the Python XSI path with AXI-MM prehooks for weight and intermediate activation memory.
+    NOTE: memory accesses are zero-latency 
+    """
+
+    assert (
+        model.get_metadata_prop("exec_mode") == "rtlsim"
+    ), "Top-level exec_mode metadata_prop must be set to rtlsim"
+
+    finn_loop_nodes = model.get_nodes_by_op_type("FINNLoop")
+    assert len(finn_loop_nodes) > 0, "No FINNLoop node found in model"
+    # TODO: support multiple FINNLoop nodes?
+    mlo_prehook = mlo_prehook_func_factory(finn_loop_nodes[0])
+
+    # make empty exec context and insert random inputs
+    ctx = model.make_empty_exec_context()
+    i_bytes = 0
+    for i_vi in model.graph.input:
+        iname = i_vi.name
+        ishape = model.get_tensor_shape(iname)
+        ishape_batch = ishape
+        ishape_batch[0] = batchsize
+        idt = model.get_tensor_datatype(iname)
+        dummy_input = gen_finn_dt_tensor(idt, ishape_batch)
+        ctx[iname] = dummy_input
+        i_bytes += (np.prod(ishape_batch) * idt.bitwidth()) / 8
+
+    # compute total output size as well
+    o_bytes = 0
+    for o_vi in model.graph.output:
+        oname = o_vi.name
+        oshape = model.get_tensor_shape(oname)
+        oshape_batch = oshape
+        oshape_batch[0] = batchsize
+        odt = model.get_tensor_datatype(oname)
+        o_bytes += (np.prod(oshape_batch) * odt.bitwidth()) / 8
+
+    rtlsim_exec(model, ctx, pre_hook=mlo_prehook)
     # extract metrics
     cycles = int(model.get_metadata_prop("cycles_rtlsim"))
     fclk_mhz = 1 / (clk_ns * 0.001)

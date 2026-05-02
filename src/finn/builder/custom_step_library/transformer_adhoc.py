@@ -45,6 +45,30 @@ from finn.transformation.move_reshape import RemoveCNVtoFCFlatten
 from finn.transformation.streamline import RoundAndClipThresholds
 from finn.transformation.streamline.absorb import AbsorbConsecutiveTransposes
 from finn.util.exception import FINNUserError
+from finn.util.fpgadataflow import is_hls_node, is_rtl_node
+from finn.util.logging import log
+
+
+# NICCHANGE: temporary. models is wrong.
+def _fix_mvau_weight_dtype(model: ModelWrapper):
+    # sets MVAU weightDataType to INT4 (which is correct)
+    # it is showing up as INT64 for some reason, but we know its INT4
+    for node in model.graph.node:
+        if "MVAU" in node.op_type:
+            inst = getCustomOp(node)
+            if node.name == "MVAU_12":
+                inst.set_nodeattr("weightDataType", "INT8")
+            else:
+                inst.set_nodeattr("weightDataType", "INT4")
+        elif node.op_type == "FINNLoop":
+            loop_model = getCustomOp(node).get_nodeattr("body")
+            _fix_mvau_weight_dtype(loop_model)
+            getCustomOp(node).set_nodeattr("body", loop_model.graph)
+    return model
+
+
+def step_fix_mvau_weight_dtype(model: ModelWrapper, cfg: DataflowBuildConfig):
+    return _fix_mvau_weight_dtype(model)
 
 
 def step_convert_to_hw(model: ModelWrapper, cfg: DataflowBuildConfig):
@@ -127,7 +151,22 @@ def step_convert_to_hw(model: ModelWrapper, cfg: DataflowBuildConfig):
     return model.transform(GiveUniqueNodeNames())
 
 
-def _set_folding_attention(model: ModelWrapper, target_cycles_per_frame):
+# NICCHANGE:
+# HLS caps ap_uint template parameter at 8191 bits. 
+# Folding must respect this
+_ATTENTION_MAX_STREAM_WIDTH = 8191
+def _attention_tile_widths(inst, embfold, seqfold):
+    qkdim, _, vdim, kvlen = inst.shapes
+    ktype_bits = DataType[inst.get_nodeattr("KType")].bitwidth()
+    vtype_bits = DataType[inst.get_nodeattr("VType")].bitwidth()
+    i_elems = qkdim // embfold
+    o_elems = vdim // embfold
+    s_elems = kvlen // seqfold
+    return ktype_bits * i_elems * s_elems, vtype_bits * o_elems * s_elems
+
+
+def _set_folding_attention(model: ModelWrapper, target_cycles_per_frame,
+                           max_stream_width=_ATTENTION_MAX_STREAM_WIDTH):
     # Run over all nodes in the model graph to look for attention operators,
     # which are currently not handled by the SetFolding transformation
     for index, node in enumerate(model.graph.node):
@@ -149,6 +188,14 @@ def _set_folding_attention(model: ModelWrapper, target_cycles_per_frame):
             # Try to unfold along the embedding dimension first, increasing
             # parallelism in steps following the common divisors the inputs.
             for fold in reversed(common_divisors([qkdim, vdim])):
+                k_w, v_w = _attention_tile_widths(
+                    inst, fold, inst.get_nodeattr("SeqFold"))
+                if k_w > max_stream_width or v_w > max_stream_width:
+                    log.info(
+                        f"{node.name}: skipping EmbFold={fold} "
+                        f"(K-tile={k_w}b, V-tile={v_w}b > {max_stream_width}b)"
+                    )
+                    continue
                 # Configure the folding attribute
                 inst.set_nodeattr("EmbFold", fold)
                 # Check if this is sufficient to meet the cycles target
@@ -158,6 +205,14 @@ def _set_folding_attention(model: ModelWrapper, target_cycles_per_frame):
             # Try to unfold along the sequence dimension next, increasing
             # parallelism in steps divisors of the key and value sequence.
             for fold in reversed(common_divisors([kvlen])):
+                k_w, v_w = _attention_tile_widths(
+                    inst, inst.get_nodeattr("EmbFold"), fold)
+                if k_w > max_stream_width or v_w > max_stream_width:
+                    log.info(
+                        f"{node.name}: skipping SeqFold={fold} "
+                        f"(K-tile={k_w}b, V-tile={v_w}b > {max_stream_width}b)"
+                    )
+                    continue
                 # Configure the folding attribute
                 inst.set_nodeattr("SeqFold", fold)
                 # Check if this is sufficient to meet the cycles target
@@ -169,7 +224,18 @@ def _set_folding_attention(model: ModelWrapper, target_cycles_per_frame):
     return model.transform(AnnotateCycles())
 
 
+def _critical_path_node_count(model: ModelWrapper) -> int:
+    depth: dict[str, int] = {}
+    for node in model.graph.node:
+        predecessors = model.find_direct_predecessors(node)
+        max_pred = 0 if not predecessors else max(depth.get(p.name, 0) for p in predecessors)
+        depth[node.name] = 1 + max_pred
+    return max(depth.values()) if depth else 1
+
+
 def step_set_folding(model: ModelWrapper, cfg: DataflowBuildConfig):
+    #log.info(f"two_pass_relaxation = {cfg.folding_two_pass_relaxation}")
+    cfg.folding_two_pass_relaxation = False
     # Resolve the target cycles per from the build configuration, considering
     # clock and target throughput
     target_cycles_per_frame = cfg._resolve_cycles_per_frame()
@@ -186,12 +252,41 @@ def step_set_folding(model: ModelWrapper, cfg: DataflowBuildConfig):
     # Set folding to target cycles for all attention operators in the model
     model = _set_folding_attention(model, target_cycles_per_frame)
 
-    # Use FINN auto-folding to configure all other operators to reach the
-    # same target cycles
+    # NICCHANGE: Also set folding of FINNLoop bodies
+    for node in model.graph.node:
+        if node.op_type == "FINNLoop":
+            node_inst = getCustomOp(node)
+            iterations = node_inst.get_nodeattr("iteration")
+            loop_model = node_inst.get_nodeattr("body")
+            k = _critical_path_node_count(loop_model)
+            #loop_target = target_cycles_per_frame // (iterations * k)
+            loop_target = target_cycles_per_frame // iterations
+            log.info(
+                f"FINNLoop {node.name}: critical path length k={k}, "
+                f"iterations={iterations}, loop-body target cycles={loop_target}"
+            )
+            loop_model = _set_folding_attention(loop_model, loop_target)
+            # TODO: Experiment with two_pass_relaxation for the loop body as well
+            loop_model = loop_model.transform(
+                SetFolding(loop_target, cfg.mvau_wwidth_max, two_pass_relaxation=False),
+            )
+            node_inst.set_nodeattr("body", loop_model.graph)
+
+    # Run AnnotateCycles after all FINNLoop's have been folded
+    model = model.transform(AnnotateCycles())
+
+    # Use FINN auto-folding to configure all other operators to reach the target cycles. 
     model = model.transform(
-        SetFolding(target_cycles_per_frame, cfg.mvau_wwidth_max, cfg.folding_two_pass_relaxation)
+        SetFolding(target_cycles_per_frame, cfg.mvau_wwidth_max, 
+                   two_pass_relaxation=cfg.folding_two_pass_relaxation),
     )
 
+    perf_dict = model.analysis(dataflow_performance)
+    max_cycles = perf_dict["max_cycles"]
+    log.info(f"max_cycles: {max_cycles}, target_cycles_per_frame: {target_cycles_per_frame}")
+    log.info(perf_dict)
+
+    # NICCHANGE TODO: Do this for the loop body as well?
     # Two-pass relaxation for attention operators: Redo folding settings
     # with lower target based on cycles of the slowest operator
     if cfg.folding_two_pass_relaxation:
@@ -294,3 +389,4 @@ def step_set_folding(model: ModelWrapper, cfg: DataflowBuildConfig):
 
     # Model with applied auto and manual folding configuration
     return model
+

@@ -38,6 +38,7 @@ Key Functions:
 - compare_execution: Compare outputs between two models
 """
 
+import contextvars
 import copy
 import numpy as np
 import qonnx.analysis.topology as ta
@@ -45,8 +46,13 @@ from qonnx.core.onnx_exec import execute_onnx as execute_onnx_base
 
 from finn.core.rtlsim_exec import rtlsim_exec
 
+# NICCHANGE: ContextVar to propagate rtlsim pre_hook through the
+# execute_onnx_base -> StreamingDataflowPartition.execute_node boundary,
+# which we cannot modify (QONNX controls the call signature).
+_rtlsim_pre_hook = contextvars.ContextVar("rtlsim_pre_hook", default=None)
 
-def execute_onnx(model, input_dict, return_full_exec_context=False, start_node=None, end_node=None):
+
+def execute_onnx(model, input_dict, return_full_exec_context=False, start_node=None, end_node=None, pre_hook=None):
     """Executes given ONNX ModelWrapper with given named inputs.
     If return_full_exec_context is False, a dict of named outputs is returned
     as indicated by the model.graph.output.
@@ -61,9 +67,20 @@ def execute_onnx(model, input_dict, return_full_exec_context=False, start_node=N
     # check if model has an execution mode set
     # if None, execute model node using the QONNX-provided execute_onnx impl
     # if set to "rtlsim" execute model using xsi
+    # NICCHANGE: resolve pre_hook from explicit arg or context var.
+    # The context var is needed because execute_onnx_base (QONNX) calls
+    # StreamingDataflowPartition.execute_node which calls execute_onnx again
+    # on the child model, but we cannot add parameters to that call chain.
+    if pre_hook is None:
+        pre_hook = _rtlsim_pre_hook.get()
+
     model_exec_mode = model.get_metadata_prop("exec_mode")
     if (model_exec_mode is None) or (model_exec_mode == ""):
-        return execute_onnx_base(model, input_dict, return_full_exec_context, start_node, end_node)
+        token = _rtlsim_pre_hook.set(pre_hook)
+        try:
+            return execute_onnx_base(model, input_dict, return_full_exec_context, start_node, end_node)
+        finally:
+            _rtlsim_pre_hook.reset(token)
     elif model_exec_mode == "rtlsim":
         # check sanity of model and then use stitched IP for rtlsim
         if not model.check_all_tensor_shapes_specified():
@@ -97,7 +114,7 @@ def execute_onnx(model, input_dict, return_full_exec_context=False, start_node=N
                     )
 
         # use stitched IP for rtlsim
-        rtlsim_exec(model, execution_context)
+        rtlsim_exec(model, execution_context, pre_hook=pre_hook)
     else:
         raise Exception(
             """Metadata property "exec_mode" is set to an unknown value. Can be left
