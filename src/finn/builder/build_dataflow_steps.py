@@ -1544,6 +1544,9 @@ def step_loop_rolling(model, cfg):
             # NICCHANGE: enforce_loop_body_template_dtype_constraints may have changed the
             #            loop body I/O dtypes. Propagate to producer/consumer nodes in the
             #            parent graph.
+            #            TODO: This also enforces the constraints we previously also enforced.
+            #                  Wasteful and not necessary in this case, but exists as a part of the
+            #                  function because it is called from minimize_bit_width as well
             model = model.transform(EnforceLoopBodyDtypeConstraints())
     else:
         log.info("MLO not selected, skipping step_loop_rolling.")

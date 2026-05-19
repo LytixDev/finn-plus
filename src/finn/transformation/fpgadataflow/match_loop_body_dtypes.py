@@ -1,4 +1,5 @@
 from onnxscript import ir
+from finn.util import onnxscript_helpers
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
@@ -103,13 +104,11 @@ def enforce_loop_body_template_dtype_constraints(loop_body_template):
     model.set_tensor_datatype(last_node_proto.output[0], target_dt)
 
     # Deserialize back to IR and update the template
-    import onnxscript
     loop_body_template._model_proto = model.model
-    loop_body_template._ir_model = onnxscript.ir.serde.deserialize_model(model.model)
+    loop_body_template._ir_model = ir.serde.deserialize_model(model.model)
     loop_body_template._ir_graph = loop_body_template._ir_model.graph
 
-    # Update IR-level finn_datatype metadata on graph inputs/outputs
-    # (build_loop_replace_pattern reads these)
+    # Update finn_datatype metadata on graph inputs/outputs
     for inp in loop_body_template._ir_graph.inputs:
         if "quant_parameter_tensor_names" not in inp.meta:
             inp.meta["quant_parameter_tensor_names"] = {}
@@ -127,8 +126,7 @@ def enforce_loop_body_template_dtype_constraints(loop_body_template):
 
     # Rebuild pattern and function from the updated IR graph
     loop_body_template._ir_graph.sort()
-    from finn.util import onnxscript_helpers as osh
-    loop_body_template.pattern = osh.direct_convert_ir_graph_to_pattern(
+    loop_body_template.pattern = onnxscript_helpers.direct_convert_ir_graph_to_pattern(
         loop_body_template._ir_graph
     )
     loop_body_template.function = loop_body_template._build_ir_function()
