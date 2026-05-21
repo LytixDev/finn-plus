@@ -135,6 +135,7 @@ from finn.util.exception import FINNUserError
 from finn.util.execution import execute_parent
 from finn.util.logging import log
 from finn.util.mlo_sim import is_mlo, mlo_prehook_func_factory
+from finn.util.handshake_monitor import install_for_model
 
 
 def verify_step(
@@ -1207,6 +1208,26 @@ def step_measure_rtlsim_performance(model: ModelWrapper, cfg: DataflowBuildConfi
         model.set_metadata_prop(
             "rtlsim_trace",
             "%s/rtlsim_perf_batch_%d.wdb" % (os.path.abspath(report_dir), rtlsim_bs),
+        )
+
+    # NICCHANGE: super experimental
+    if cfg.capture_handshake_traces:
+        # Inject extra output ports into finn_design_wrapper.v that exposes ready-valid signals
+        # See src/finn/util/handshake_monitor.py
+        vivado_stitch_proj_dir = model.get_metadata_prop("vivado_stitch_proj")
+        wrapper_path = model.get_metadata_prop("wrapper_filename")
+        with open(vivado_stitch_proj_dir + "/all_verilog_srcs.txt", "r") as f:
+            all_verilog_srcs = f.read().split()
+        manifest_path, csv_path = install_for_model(
+            all_verilog_srcs, wrapper_path, os.path.abspath(report_dir)
+        )
+        # Add batch size to name so we don't have to worry about successive runs overwriting eachother
+        csv_path = "%s/handshake_b%d_summary.csv" % (os.path.abspath(report_dir), rtlsim_bs)
+        model.set_metadata_prop("handshake_inventory", manifest_path)
+        model.set_metadata_prop("handshake_csv_out", csv_path)
+        log.info(
+            f"Handshake capture enabled: manifest={manifest_path}, "
+            f"csv_out={csv_path}"
         )
 
     if is_mlo(model):

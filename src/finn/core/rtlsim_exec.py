@@ -42,6 +42,7 @@ from finn.util.basic import (
 )
 from finn.util.data_packing import npy_to_rtlsim_input, rtlsim_output_to_npy
 from finn.util.exception import FINNConfigurationError, FINNError, FINNInternalError
+from finn.util.handshake_monitor import HandshakeMonitorTask
 
 finnxsi = xsi if xsi.is_available() else None
 
@@ -381,6 +382,15 @@ def rtlsim_exec_finnxsi(model, execution_context, pre_hook=None, post_hook=None)
     finnxsi.reset_rtlsim(sim)
     if pre_hook is not None:
         pre_hook(sim)
+
+    # NICCHANGE:
+    # If ready-valid signal capture is enabled then set up a monitor task that reads the ports each cycle
+    hs_monitor = None
+    hs_manifest = model.get_metadata_prop("handshake_inventory")
+    hs_csv_out = model.get_metadata_prop("handshake_csv_out")
+    if hs_manifest and os.path.isfile(hs_manifest):
+        hs_monitor = HandshakeMonitorTask(sim, hs_manifest)
+        sim.enlist(hs_monitor)
     n_cycles = finnxsi.rtlsim_multi_io(
         sim,
         io_dict,
@@ -388,6 +398,8 @@ def rtlsim_exec_finnxsi(model, execution_context, pre_hook=None, post_hook=None)
         sname="",
         liveness_threshold=get_liveness_threshold_cycles() * batchsize,
     )
+    if hs_monitor is not None and hs_csv_out:
+        hs_monitor.save_csv(hs_csv_out)
     if post_hook is not None:
         post_hook(sim)
     # important to call close_rtlsim for finnxsi to flush traces and stop

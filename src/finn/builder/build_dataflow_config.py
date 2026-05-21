@@ -395,6 +395,12 @@ class DataflowBuildConfig(DataClassJSONMixin, DataClassYAMLMixin):
     #: By default, waveforms won't be saved.
     verify_save_rtlsim_waveforms: bool = False
 
+    #: NICCHANGE:
+    #: (Only relevant if RTLSIM_PERFORMANCE is enabled)
+    #: Capture AXI ready-valid signals during rtlsim.
+    #: Data written to <output_dir>/report/handshake_traces/
+    capture_handshake_traces: bool = False
+
     #: Set verification tolerance: absolute error per output element.
     verification_atol: float = 1e-3
 

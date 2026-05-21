@@ -436,29 +436,30 @@ def prepare_finn(settings: FINNSettings, accept_defaults: bool, batch: bool = Fa
     if not settings.finn_build_dir.exists():
         settings.finn_build_dir.mkdir()
 
+    # NICCHANGE: TMP
     # Update / Install all dependencies
-    try:
-        updater = DependencyUpdater(
-            dependency_location=settings.finn_deps,
-            dependency_definition_file=settings.finn_deps_definitions,
-            git_timeout_s=settings.deps_git_timeout,
-            non_interactive=batch,
-        )
-        if settings.automatic_dependency_updates:
-            updater.update()
-        else:
-            outdated = updater.get_outdated_dependencies()
-            all_deps = updater.deps.get_all_dependencies()
-            warning(f"Skipping dependency updates! (Outdated dependencies: {', '.join(outdated)})")
-            if set(outdated) == set(all_deps):
-                warning(
-                    "It seems that [italic bold]all[/italic bold] dependencies are oudated. "
-                    "Consider running `finn deps update` before continuing!",
-                    critical=True,
-                )
-    except FINNUserError as e:
-        error(f"FINN ERROR: {e}")
-        sys.exit(1)
+    # try:
+    #     updater = DependencyUpdater(
+    #         dependency_location=settings.finn_deps,
+    #         dependency_definition_file=settings.finn_deps_definitions,
+    #         git_timeout_s=settings.deps_git_timeout,
+    #         non_interactive=batch,
+    #     )
+    #     if settings.automatic_dependency_updates:
+    #         updater.update()
+    #     else:
+    #         outdated = updater.get_outdated_dependencies()
+    #         all_deps = updater.deps.get_all_dependencies()
+    #         warning(f"Skipping dependency updates! (Outdated dependencies: {', '.join(outdated)})")
+    #         if set(outdated) == set(all_deps):
+    #             warning(
+    #                 "It seems that [italic bold]all[/italic bold] dependencies are oudated. "
+    #                 "Consider running `finn deps update` before continuing!",
+    #                 critical=True,
+    #             )
+    # except FINNUserError as e:
+    #     error(f"FINN ERROR: {e}")
+    #     sys.exit(1)
 
     # Even if we dont update deps, we still need to make xsi available
     finn_xsi = Path(resolve_module_path("finn_xsi"))
